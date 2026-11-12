@@ -1,0 +1,5 @@
+# Imported by the VPS proxy (RADSReis/vps-infra) from /srv/questkeep/proxy/sites/lifeaim-prod.caddy.
+lifeaim-api.questkeep.cloud {
+	encode zstd gzip
+	reverse_proxy lifeaim-prod-api:8080
+}

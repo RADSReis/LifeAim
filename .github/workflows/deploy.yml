@@ -1,0 +1,115 @@
+# Tests, builds the API image, pushes it to GHCR and restarts it on the Questkeep VPS.
+# develop → dev (https://dev-lifeaim-api.questkeep.cloud), main → prod (https://lifeaim-api.questkeep.cloud).
+name: Deploy API
+
+on:
+  push:
+    branches: [develop, main]
+    paths:
+      - src/**
+      - tests/**
+      - global.json
+      - LifeAim.sln
+      - Dockerfile
+      - .dockerignore
+      - deploy/**
+      - .github/workflows/deploy.yml
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+      - run: dotnet test LifeAim.sln -c Release
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.ref_name == 'main' && 'prod' || 'dev' }}
+      url: ${{ github.ref_name == 'main' && 'https://lifeaim-api.questkeep.cloud/health' || 'https://dev-lifeaim-api.questkeep.cloud/health' }}
+    concurrency:
+      group: deploy-${{ github.ref_name }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/radsreis/lifeaim-api
+      TAG: ${{ github.ref_name }}
+      LA_ENV: ${{ github.ref_name == 'main' && 'prod' || 'dev' }}
+      PROXY_SITES: /srv/questkeep/proxy/sites
+      PROXY_CONTAINER: questkeep-proxy-caddy-1
+    steps:
+      - name: Only develop and main deploy
+        if: github.ref_name != 'develop' && github.ref_name != 'main'
+        run: |
+          echo "::error::Deploys run from develop (dev) or main (prod), not from ${GITHUB_REF_NAME}."
+          exit 1
+
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ env.IMAGE }}:${{ env.TAG }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      - uses: actions/delete-package-versions@v5
+        with:
+          package-name: lifeaim-api
+          package-type: container
+          min-versions-to-keep: 6
+          delete-only-untagged-versions: true
+
+      - name: Configure SSH
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          printf 'Host vps\n  HostName %s\n  User %s\n  IdentityFile ~/.ssh/deploy_key\n  StrictHostKeyChecking yes\n' "$VPS_HOST" "$VPS_USER" > ~/.ssh/config
+
+      - name: Upload compose file and .env
+        run: |
+          ssh vps 'mkdir -p ~/lifeaim/'"$LA_ENV"
+          scp deploy/compose.yml "vps:lifeaim/$LA_ENV/compose.yml"
+          # Created once; secrets added there by hand later are kept.
+          ssh vps "cd lifeaim/$LA_ENV && [ -f .env ] || { printf 'LA_ENV=%s\nLA_IMAGE_TAG=%s\n' '$LA_ENV' '$TAG' > .env && chmod 600 .env; }"
+
+      # Same pattern as Questkeep: the job's short-lived token logs in to GHCR in a throwaway Docker
+      # config, so no registry credential stays on the VPS, and the deploy waits on the same lock as
+      # Questkeep's, since parallel pulls or a prune during a pull break Docker's content store.
+      - name: Pull and restart the API
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          remote='set -e; d=$(mktemp -d); trap "rm -rf \"$d\"" EXIT; export DOCKER_CONFIG="$d"; if [ -d "$HOME/.docker/cli-plugins" ]; then ln -s "$HOME/.docker/cli-plugins" "$d/cli-plugins"; fi; docker login ghcr.io -u "$1" --password-stdin; cd "$HOME/$2"; docker compose pull api; docker compose up -d api; docker image prune -f || true'
+          lock='if command -v flock >/dev/null 2>&1; then exec flock -w 900 /tmp/questkeep-deploy.lock "$@"; else exec "$@"; fi'
+          printf '%s' "$GHCR_TOKEN" | ssh vps "sh -c $(printf '%q' "$lock") lock sh -c $(printf '%q' "$remote") deploy $(printf '%q' "$GITHUB_ACTOR") lifeaim/$LA_ENV"
+
+      # Caddy reload validates first and keeps the old config on error, so Questkeep never drops.
+      - name: Publish the Caddy site and reload the proxy
+        run: |
+          scp "deploy/caddy/$LA_ENV.caddy" "vps:$PROXY_SITES/lifeaim-$LA_ENV.caddy"
+          ssh vps "docker exec $PROXY_CONTAINER caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile"

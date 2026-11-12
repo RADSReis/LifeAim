@@ -1,0 +1,25 @@
+# One LifeAim environment (dev or prod) on the Questkeep VPS.
+# Each environment is its own folder on the server (/home/deploy/lifeaim/<env>) with this file and
+# its own .env; the project name (lifeaim-dev / lifeaim-prod) keeps their containers apart:
+#   docker compose up -d
+# Nothing here publishes a port: the VPS Caddy proxy (RADSReis/vps-infra) reaches the API through the shared
+# "edge" network by its alias (see deploy/caddy).
+
+name: lifeaim-${LA_ENV:?set LA_ENV (dev or prod) in .env}
+
+services:
+  api:
+    image: ghcr.io/radsreis/lifeaim-api:${LA_IMAGE_TAG:?set LA_IMAGE_TAG in .env}
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      # Behind Caddy: honour its X-Forwarded-For/-Proto headers.
+      ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
+    networks:
+      edge:
+        aliases: ["lifeaim-${LA_ENV}-api"]
+
+networks:
+  # Created by the proxy (vps-infra); shared by the proxy and every app.
+  edge:
+    external: true
