@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.15" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Modules\LifeAim.Modules.Goals\LifeAim.Modules.Goals.csproj" />
+    <ProjectReference Include="..\Modules\LifeAim.Modules.Planning\LifeAim.Modules.Planning.csproj" />
+    <ProjectReference Include="..\Modules\LifeAim.Modules.Progress\LifeAim.Modules.Progress.csproj" />
+    <ProjectReference Include="..\Modules\LifeAim.Modules.Agents\LifeAim.Modules.Agents.csproj" />
+    <ProjectReference Include="..\Modules\LifeAim.Modules.Communication\LifeAim.Modules.Communication.csproj" />
+    <ProjectReference Include="..\Modules\LifeAim.Modules.Reporting\LifeAim.Modules.Reporting.csproj" />
+  </ItemGroup>
+
+</Project>
