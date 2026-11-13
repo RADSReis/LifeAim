@@ -1,5 +1,6 @@
 using Discord;
 using Discord.WebSocket;
+using LifeAim.Modules.Agents.Contracts;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -7,21 +8,28 @@ using Microsoft.Extensions.Options;
 namespace LifeAim.Modules.Communication.Infrastructure.DiscordBot;
 
 /// <summary>
-/// Keeps the bot connected to the Discord gateway for as long as the API runs, and answers DMs.
+/// Keeps the bot connected to the Discord gateway for as long as the API runs, and hands DMs to Pippin.
 /// </summary>
 internal sealed class DiscordBotService(
     IOptions<DiscordOptions> options,
+    ChannelUserRepository channelUsers,
+    IPippin pippin,
     ILogger<DiscordBotService> logger) : BackgroundService
 {
-    private const string GreetingReply = "Olá! Eu sou o Pippin 👋";
+    private const string Channel = "discord";
     private const string NotAllowedReply =
         "Oi! Eu ainda sou uma versão privada e só converso com quem foi convidado. 🙂";
+    private const string FailureReply =
+        "Ops, tropecei aqui do meu lado e não consegui responder. Pode tentar de novo daqui a pouco?";
 
     private readonly DiscordOptions _options = options.Value;
     private DiscordSocketClient? _client;
+    private CancellationToken _stoppingToken;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        _stoppingToken = stoppingToken;
+
         if (string.IsNullOrWhiteSpace(_options.Token))
         {
             logger.LogWarning("Discord bot disabled: {Setting} is not configured.", "Discord:Token");
@@ -61,20 +69,28 @@ internal sealed class DiscordBotService(
         }
     }
 
-    private async Task OnMessageReceivedAsync(SocketMessage message)
+    private Task OnMessageReceivedAsync(SocketMessage message)
     {
         // 1. Never answer bots, including Pippin itself: that would loop forever.
         if (message.Author.IsBot)
         {
-            return;
+            return Task.CompletedTask;
         }
 
         // 2. Pippin only talks in private.
         if (message.Channel is not IDMChannel)
         {
-            return;
+            return Task.CompletedTask;
         }
 
+        // Discord.Net runs this handler on its gateway task: anything slow here (the database, and soon
+        // the AI, which takes seconds) would stall every other event. So the work runs on its own task.
+        _ = Task.Run(() => AnswerAsync(message));
+        return Task.CompletedTask;
+    }
+
+    private async Task AnswerAsync(SocketMessage message)
+    {
         try
         {
             // 3. While LifeAim is private, only allowed users get a real answer.
@@ -84,12 +100,28 @@ internal sealed class DiscordBotService(
                 return;
             }
 
-            // 4. Phase 1: a fixed reply, just to prove the pipe works.
-            await message.Channel.SendMessageAsync(GreetingReply);
+            // Shows "Pippin is typing..." until the reply is sent.
+            using var typing = message.Channel.EnterTypingState();
+
+            // 4. From here on LifeAim only knows its own user id, never the Discord one.
+            var displayName = message.Author.GlobalName ?? message.Author.Username;
+            var userId = await channelUsers.GetOrCreateAsync(
+                Channel, message.Author.Id.ToString(), displayName, _stoppingToken);
+
+            var reply = await pippin.ReplyAsync(new PippinMessage(userId, displayName, message.Content), _stoppingToken);
+            await message.Channel.SendMessageAsync(reply);
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Failed to answer a Discord DM.");
+            try
+            {
+                await message.Channel.SendMessageAsync(FailureReply);
+            }
+            catch (Exception sendEx)
+            {
+                logger.LogError(sendEx, "Failed to tell the user that the answer failed.");
+            }
         }
     }
 

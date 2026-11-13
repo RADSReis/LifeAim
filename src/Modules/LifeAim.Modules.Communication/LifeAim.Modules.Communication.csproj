@@ -14,7 +14,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Compiled into the DLL, so the scripts always ship with the code that expects them. -->
+    <EmbeddedResource Include="Infrastructure\Migrations\*.sql" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\BuildingBlocks\LifeAim.BuildingBlocks\LifeAim.BuildingBlocks.csproj" />
+    <!-- Only for Agents' public contract (IPippin): a DM is handed to Pippin. -->
+    <ProjectReference Include="..\LifeAim.Modules.Agents\LifeAim.Modules.Agents.csproj" />
   </ItemGroup>
 
 </Project>

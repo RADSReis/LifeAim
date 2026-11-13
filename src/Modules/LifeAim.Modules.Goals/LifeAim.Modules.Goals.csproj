@@ -16,6 +16,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="LifeAim.Modules.Goals.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\BuildingBlocks\LifeAim.BuildingBlocks\LifeAim.BuildingBlocks.csproj" />
   </ItemGroup>
 

@@ -3,6 +3,7 @@
 
 using DbUp;
 using LifeAim.BuildingBlocks;
+using LifeAim.Modules.Communication;
 using LifeAim.Modules.Goals;
 using Microsoft.Extensions.Configuration;
 using Npgsql;
@@ -11,6 +12,7 @@ using Npgsql;
 ModuleMigrations[] modules =
 [
     GoalsModule.Migrations,
+    CommunicationModule.Migrations,
 ];
 
 // Locally: User Secrets (shared with the API). On the VPS: ConnectionStrings__LifeAim.
