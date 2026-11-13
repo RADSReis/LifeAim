@@ -16,7 +16,7 @@ builder.Services
     .AddPlanningModule()
     .AddProgressModule()
     .AddAgentsModule()
-    .AddCommunicationModule()
+    .AddCommunicationModule(builder.Configuration)
     .AddReportingModule();
 
 var app = builder.Build();
