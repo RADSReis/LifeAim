@@ -42,6 +42,8 @@ jobs:
       IMAGE: ghcr.io/radsreis/lifeaim-api
       TAG: ${{ github.ref_name }}
       LA_ENV: ${{ github.ref_name == 'main' && 'prod' || 'dev' }}
+      # Owned by the deploy user (created once with sudo); each environment is a folder inside it.
+      APP_ROOT: /srv/lifeaim
       PROXY_SITES: /srv/questkeep/proxy/sites
       PROXY_CONTAINER: questkeep-proxy-caddy-1
     steps:
@@ -92,10 +94,10 @@ jobs:
 
       - name: Upload compose file and .env
         run: |
-          ssh vps 'mkdir -p ~/lifeaim/'"$LA_ENV"
-          scp deploy/compose.yml "vps:lifeaim/$LA_ENV/compose.yml"
+          ssh vps "mkdir -p $APP_ROOT/$LA_ENV"
+          scp deploy/compose.yml "vps:$APP_ROOT/$LA_ENV/compose.yml"
           # Created once; secrets added there by hand later are kept.
-          ssh vps "cd lifeaim/$LA_ENV && [ -f .env ] || { printf 'LA_ENV=%s\nLA_IMAGE_TAG=%s\n' '$LA_ENV' '$TAG' > .env && chmod 600 .env; }"
+          ssh vps "cd $APP_ROOT/$LA_ENV && [ -f .env ] || { printf 'LA_ENV=%s\nLA_IMAGE_TAG=%s\n' '$LA_ENV' '$TAG' > .env && chmod 600 .env; }"
 
       # Same pattern as Questkeep: the job's short-lived token logs in to GHCR in a throwaway Docker
       # config, so no registry credential stays on the VPS, and the deploy waits on the same lock as
@@ -104,9 +106,9 @@ jobs:
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          remote='set -e; d=$(mktemp -d); trap "rm -rf \"$d\"" EXIT; export DOCKER_CONFIG="$d"; if [ -d "$HOME/.docker/cli-plugins" ]; then ln -s "$HOME/.docker/cli-plugins" "$d/cli-plugins"; fi; docker login ghcr.io -u "$1" --password-stdin; cd "$HOME/$2"; docker compose pull api; docker compose up -d api; docker image prune -f || true'
+          remote='set -e; d=$(mktemp -d); trap "rm -rf \"$d\"" EXIT; export DOCKER_CONFIG="$d"; if [ -d "$HOME/.docker/cli-plugins" ]; then ln -s "$HOME/.docker/cli-plugins" "$d/cli-plugins"; fi; docker login ghcr.io -u "$1" --password-stdin; cd "$2"; docker compose pull api; docker compose up -d api; docker image prune -f || true'
           lock='if command -v flock >/dev/null 2>&1; then exec flock -w 900 /tmp/questkeep-deploy.lock "$@"; else exec "$@"; fi'
-          printf '%s' "$GHCR_TOKEN" | ssh vps "sh -c $(printf '%q' "$lock") lock sh -c $(printf '%q' "$remote") deploy $(printf '%q' "$GITHUB_ACTOR") lifeaim/$LA_ENV"
+          printf '%s' "$GHCR_TOKEN" | ssh vps "sh -c $(printf '%q' "$lock") lock sh -c $(printf '%q' "$remote") deploy $(printf '%q' "$GITHUB_ACTOR") $APP_ROOT/$LA_ENV"
 
       # Caddy reload validates first and keeps the old config on error, so Questkeep never drops.
       - name: Publish the Caddy site and reload the proxy

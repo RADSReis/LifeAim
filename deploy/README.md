@@ -15,13 +15,17 @@ Internet ─► questkeep-proxy-caddy ─┬─► questkeep-*  (Questkeep)
 ## Server layout
 
 ```
-~/lifeaim/                       (home of the deploy user)
+/srv/lifeaim/                    (owned by the deploy user)
 ├── dev/    compose.yml, .env    (from deploy/compose.yml)
 └── prod/
 /srv/questkeep/proxy/sites/
 ├── lifeaim-dev.caddy            (from deploy/caddy/dev.caddy)
 └── lifeaim-prod.caddy
 ```
+
+`/srv/lifeaim` is created once by an admin, since the deploy user has no sudo:
+`sudo mkdir -p /srv/lifeaim && sudo chown <deploy user>: /srv/lifeaim`. The workflow then creates each
+environment folder and its first `.env`; secrets added there by hand (the Discord token, ...) are kept.
 
 The proxy's Caddyfile imports `sites/*.caddy`, so LifeAim only adds its own site file and
 runs `caddy reload`. A broken file is rejected and the old config keeps serving Questkeep.

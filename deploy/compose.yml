@@ -1,5 +1,5 @@
 # One LifeAim environment (dev or prod) on the Questkeep VPS.
-# Each environment is its own folder on the server (/home/deploy/lifeaim/<env>) with this file and
+# Each environment is its own folder on the server (/srv/lifeaim/<env>) with this file and
 # its own .env; the project name (lifeaim-dev / lifeaim-prod) keeps their containers apart:
 #   docker compose up -d
 # Nothing here publishes a port: the VPS Caddy proxy (RADSReis/vps-infra) reaches the API through the shared
