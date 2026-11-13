@@ -1,3 +1,4 @@
+using LifeAim.BuildingBlocks.Database;
 using LifeAim.Modules.Agents;
 using LifeAim.Modules.Communication;
 using LifeAim.Modules.Goals;
@@ -9,7 +10,8 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
-builder.Services.AddHealthChecks();
+builder.Services.AddLifeAimDatabase(builder.Configuration);
+builder.Services.AddHealthChecks().AddLifeAimDatabase();
 
 builder.Services
     .AddGoalsModule()
