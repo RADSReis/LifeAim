@@ -15,6 +15,10 @@ services:
       ASPNETCORE_ENVIRONMENT: Production
       # Behind Caddy: honour its X-Forwarded-For/-Proto headers.
       ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
+      # Discord bot ("__" is ":" for .NET). Secrets added by hand to this environment's .env on the VPS;
+      # left blank, the bot stays off and the API still runs. "docker compose up -d api" picks up changes.
+      Discord__Token: ${Discord__Token:-}
+      Discord__AllowedUserIds__0: ${Discord__AllowedUserIds__0:-}
     networks:
       edge:
         aliases: ["lifeaim-${LA_ENV}-api"]
