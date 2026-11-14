@@ -16,6 +16,14 @@ internal interface INode
     string? PendingQuestion(ConversationContext context);
 
     Task<NodeResult> RunAsync(ConversationContext context, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// How the node starts when the path classifier sends the conversation here in the middle of another stage.
+    /// By default it handles the same message, as if it had arrived at this stage ("quero adicionar outra meta:
+    /// correr 5 km" → CollectGoals extracts it). <paramref name="goalId"/> is the saved goal the user meant, if any.
+    /// </summary>
+    Task<NodeResult> EnterAsync(ConversationContext context, Guid? goalId, CancellationToken cancellationToken) =>
+        RunAsync(context, cancellationToken);
 }
 
 /// <summary>What a node did with the message.</summary>

@@ -44,6 +44,7 @@ public static class AgentsModule
         services.AddSingleton<GoalDetailing>();
         services.AddSingleton<FallbackRouter>();
         services.AddSingleton<GreetingReply>();
+        services.AddSingleton<PathClassifier>();
         services.AddSingleton<IPippin, PippinWorkflow>();
         services.AddSingleton<IConversationReset, ConversationReset>();
 

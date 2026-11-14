@@ -271,6 +271,36 @@ public sealed class PippinRealAiTests(RealAiApiFactory factory, ITestOutputHelpe
         Assert.Equal("CollectGoals", (await StateAsync()).Stage);
     }
 
+    // ---------- The path classifier ----------
+
+    [RealAiFact]
+    public async Task A_new_goal_while_detailing_goes_to_collecting_it()
+    {
+        var id = await SeedGoalAsync("Ler mais", RealAiApiFactory.Now);
+        await SeedAsync("DetailGoals", DetailingDraft(id));
+
+        var reply = await Send("na verdade quero adicionar outra meta: correr 5 km até o fim do ano");
+
+        Assert.Equal("ConfirmGoals", (await StateAsync()).Stage);
+        Assert.Contains("5 km", reply);
+        Assert.Single(await GoalsAsync()); // nothing new is saved before the "sim"
+    }
+
+    [RealAiFact]
+    public async Task Asking_to_talk_about_a_saved_goal_starts_detailing_it()
+    {
+        await SeedAsync("CollectGoals", PeriodOnly);
+        await SeedGoalAsync("Emagrecer até 90 kg", RealAiApiFactory.Now.AddMinutes(-2));
+        var books = await SeedGoalAsync("Ler mais", RealAiApiFactory.Now.AddMinutes(-1));
+
+        var reply = await Send("quero detalhar melhor a meta dos livros");
+
+        var state = await StateAsync();
+        Assert.Equal("DetailGoals", state.Stage);
+        Assert.Equal(books, state.Draft.GetProperty("detailQueue")[0].GetGuid());
+        Assert.StartsWith("Claro!", reply);
+    }
+
     // Waiting for "sim" to a proposal for the saved goal "Ler mais".
     private static string DetailingDraft(Guid goalId) =>
         $$"""

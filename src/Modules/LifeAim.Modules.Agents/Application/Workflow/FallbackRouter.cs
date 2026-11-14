@@ -21,6 +21,13 @@ internal sealed class FallbackRouter
     /// The question of the current stage (INode.PendingQuestion). Not Pippin's last message: that may be a
     /// previous router reply, and repeating it would nest the replies inside each other at every message.
     /// </param>
+    /// <summary>The message tried to answer the current question but was unclear: say what is needed and ask again.</summary>
+    public NodeResult Clarify(string? clarification, string? pendingQuestion)
+    {
+        var reply = clarification ?? "Acho que não entendi direito. 🤔";
+        return NodeResult.Answer(pendingQuestion is null ? reply : $"{reply}\n\n{pendingQuestion}");
+    }
+
     public NodeResult Route(string? pendingQuestion)
     {
         var reply = NoFeatureReplies[Random.Shared.Next(NoFeatureReplies.Length)];

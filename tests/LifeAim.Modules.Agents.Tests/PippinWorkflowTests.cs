@@ -573,6 +573,117 @@ public class PippinWorkflowTests
         Assert.Empty(goals.Updated);
     }
 
+    // ---------- The path classifier: when a node does not understand, the AI picks the way on ----------
+
+    private const string NewGoalRunning =
+        """
+        { "aboutGoals": true, "isGreeting": false, "horizonDate": null,
+          "goals": [{ "name": "Correr 5 km", "indicator": "distância numa corrida", "targetValue": 5, "unit": "km",
+                      "dueDate": "2026-12-31" }],
+          "doubts": [], "finished": false }
+        """;
+
+    [Fact]
+    public async Task A_new_goal_while_detailing_jumps_to_collecting_with_the_same_message()
+    {
+        var goals = new FakeGoalService();
+        var reading = goals.Add(UserId, "Ler mais", November.GetUtcNow());
+        AtDetailing(goals, reading);
+        var ai = new FakeChatClient(
+            DetailAnswer("other", target: 2),                                   // DetailGoals: not about this goal
+            """{ "route": "goto", "stage": "CollectGoals", "reason": "meta nova" }""", // the classifier
+            NewGoalRunning);                                                    // CollectGoals, same message
+        var workflow = CreateWorkflow(ai, goals);
+
+        var reply = await workflow.ReplyAsync(Message("na verdade quero adicionar outra meta: correr 5 km"));
+
+        Assert.StartsWith("Entendi esta meta:\n1. **Correr 5 km**", reply);
+        Assert.Equal(Stage.ConfirmGoals, _store.States[UserId].Stage);
+        Assert.Null(_store.States[UserId].Draft!.DetailQueue); // the detailing in progress was left behind
+        Assert.Equal(3, ai.Calls.Count);
+    }
+
+    [Fact]
+    public async Task Talking_about_a_saved_goal_jumps_to_detailing_that_goal()
+    {
+        AtStage(Stage.CollectGoals, GoalsDraft.Empty(new DateOnly(2026, 12, 31)));
+        var goals = new FakeGoalService();
+        goals.Add(UserId, "Emagrecer até 90 kg", November.GetUtcNow());
+        var reading = goals.Add(UserId, "Ler mais", November.GetUtcNow());
+        var ai = new FakeChatClient(
+            """{ "aboutGoals": false, "isGreeting": false, "goals": [], "doubts": [], "finished": false }""",
+            """{ "route": "goto", "stage": "DetailGoals", "goalNumber": 2, "reason": "quer falar dos livros" }""",
+            ProposalForReading);
+        var workflow = CreateWorkflow(ai, goals);
+
+        var reply = await workflow.ReplyAsync(Message("quero detalhar melhor a meta dos livros"));
+
+        Assert.StartsWith("Claro!\n\nVamos detalhar **Ler 2 livros**:", reply);
+        Assert.Equal(Stage.DetailGoals, _store.States[UserId].Stage);
+        Assert.Equal([reading.Id], _store.States[UserId].Draft!.DetailQueue);
+    }
+
+    [Fact]
+    public async Task A_jump_the_code_does_not_allow_becomes_a_clarification_and_the_stage_stays()
+    {
+        AtStage(Stage.ConfirmGoals, ShownDraft());
+        var goals = new FakeGoalService();
+        var workflow = CreateWorkflow(new FakeChatClient(
+            Confirmation("other", booksTarget: 2),
+            """{ "route": "goto", "stage": "DetailGoals", "goalNumber": 1, "reason": "detalhar" }"""), goals);
+
+        var reply = await workflow.ReplyAsync(Message("quero detalhar essas metas"));
+
+        // ConfirmGoals → DetailGoals would detail goals that are not saved yet: refused by code.
+        Assert.StartsWith("Acho que não entendi direito. 🤔\n\nEntendi estas 2 metas", reply);
+        Assert.Equal(Stage.ConfirmGoals, _store.States[UserId].Stage);
+        Assert.Empty(goals.Created);
+    }
+
+    [Fact]
+    public async Task An_unclear_answer_gets_the_classifiers_clarification_and_the_question_again()
+    {
+        AtStage(Stage.CollectGoals, GoalsDraft.Empty(new DateOnly(2026, 12, 31)));
+        var workflow = CreateWorkflow(new FakeChatClient(
+            """{ "aboutGoals": false, "isGreeting": false, "goals": [], "doubts": [], "finished": false }""",
+            """{ "route": "clarify", "clarification": "Preciso saber qual meta você quer alcançar.", "reason": "vago" }"""));
+
+        var reply = await workflow.ReplyAsync(Message("hmm talvez aquilo"));
+
+        Assert.Equal("Preciso saber qual meta você quer alcançar.\n\nQuais metas você quer alcançar até 31/12/2026?", reply);
+    }
+
+    [Fact]
+    public async Task When_the_destination_does_not_understand_either_nothing_changes_and_pippin_asks_again()
+    {
+        var goals = new FakeGoalService();
+        var reading = goals.Add(UserId, "Ler mais", November.GetUtcNow());
+        AtDetailing(goals, reading);
+        var workflow = CreateWorkflow(new FakeChatClient(
+            DetailAnswer("other", target: 2),
+            """{ "route": "goto", "stage": "CollectGoals", "reason": "talvez meta nova" }""",
+            """{ "aboutGoals": false, "isGreeting": false, "goals": [], "doubts": [], "finished": false }"""), goals);
+
+        var reply = await workflow.ReplyAsync(Message("e aquela coisa"));
+
+        Assert.StartsWith("Acho que não entendi direito. 🤔\n\nVamos detalhar **Ler 2 livros**", reply);
+        Assert.Equal(Stage.DetailGoals, _store.States[UserId].Stage);
+        Assert.Equal([reading.Id], _store.States[UserId].Draft!.DetailQueue); // the detailing is still there
+    }
+
+    [Fact]
+    public async Task Out_of_scope_keeps_the_funny_reply_and_the_question()
+    {
+        AtStage(Stage.CollectGoals, GoalsDraft.Empty(new DateOnly(2026, 12, 31)));
+        var workflow = CreateWorkflow(new FakeChatClient(
+            """{ "aboutGoals": false, "isGreeting": false, "goals": [], "doubts": [], "finished": false }""",
+            """{ "route": "out_of_scope", "reason": "previsão do tempo" }"""));
+
+        var reply = await workflow.ReplyAsync(Message("qual a previsão do tempo?"));
+
+        Assert.EndsWith(FallbackRouter.BackToQuestion + "Quais metas você quer alcançar até 31/12/2026?", reply);
+    }
+
     // The conversation waiting for "sim" to the proposal of the first goal in the queue.
     private void AtDetailing(FakeGoalService goals, GoalDto first, GoalDto? second = null, bool doubt = false) =>
         AtStage(Stage.DetailGoals, new GoalsDraft(
@@ -613,6 +724,7 @@ public class PippinWorkflowTests
             ],
             new FallbackRouter(),
             new GreetingReply(),
+            new PathClassifier(ai),
             goals,
             NullLogger<PippinWorkflow>.Instance);
     }

@@ -26,6 +26,7 @@ internal sealed class PippinWorkflow : IPippin
     private readonly IConversationStore _store;
     private readonly FallbackRouter _router;
     private readonly GreetingReply _greeting;
+    private readonly PathClassifier _classifier;
     private readonly IGoalService _goals;
     private readonly ILogger<PippinWorkflow> _logger;
     private readonly Dictionary<Stage, INode> _nodes;
@@ -35,12 +36,14 @@ internal sealed class PippinWorkflow : IPippin
         IEnumerable<INode> nodes,
         FallbackRouter router,
         GreetingReply greeting,
+        PathClassifier classifier,
         IGoalService goals,
         ILogger<PippinWorkflow> logger)
     {
         _store = store;
         _router = router;
         _greeting = greeting;
+        _classifier = classifier;
         _goals = goals;
         _logger = logger;
         _nodes = nodes.ToDictionary(node => node.Stage);
@@ -106,15 +109,50 @@ internal sealed class PippinWorkflow : IPippin
                 return result;
             }
 
-            // A greeting asks for nothing: greet back. Anything else unexpected is a request → the router.
+            // A greeting asks for nothing: greet back. Anything else unexpected → the path classifier decides.
             return result.IsGreeting
                 ? NodeResult.Answer(_greeting.Reply(context, node.PendingQuestion(context)))
-                : _router.Route(node.PendingQuestion(context));
+                : await FindPathAsync(context, node, cancellationToken);
         }
         catch (AiNotConfiguredException)
         {
             _logger.LogWarning("Pippin needs the AI at stage {Stage}, but OpenAI:ApiKey is not configured.", context.Stage);
             return NodeResult.Answer(NoBrainReply);
+        }
+    }
+
+    // The node did not understand: the classifier picks a way on, the code checks and applies it.
+    // At most one jump per message: if the destination does not understand either, Pippin asks again.
+    private async Task<NodeResult> FindPathAsync(ConversationContext context, INode node, CancellationToken cancellationToken)
+    {
+        var pending = node.PendingQuestion(context);
+        var decision = await _classifier.ClassifyAsync(context, pending, cancellationToken);
+        _logger.LogInformation(
+            "Pippin path at {Stage}: {Kind} {Target} ({Reason})", context.Stage, decision.Kind, decision.Stage, decision.Reason);
+
+        switch (decision.Kind)
+        {
+            case PathKind.Goto when decision.Stage is { } target && PathClassifier.IsAllowed(context.Stage, target):
+                var (stageBefore, draftBefore) = (context.Stage, context.Draft);
+                context.Stage = target;
+                var entered = await _nodes[target].EnterAsync(context, decision.GoalId, cancellationToken);
+                if (entered.Expected)
+                {
+                    return entered;
+                }
+
+                (context.Stage, context.Draft) = (stageBefore, draftBefore); // the jump did not work: nothing changes
+                return _router.Clarify(null, pending);
+
+            case PathKind.Goto:
+                _logger.LogWarning("Pippin path refused: {From} → {To} is not allowed.", context.Stage, decision.Stage);
+                return _router.Clarify(null, pending);
+
+            case PathKind.Clarify:
+                return _router.Clarify(decision.Clarification, pending);
+
+            default:
+                return _router.Route(pending);
         }
     }
 }

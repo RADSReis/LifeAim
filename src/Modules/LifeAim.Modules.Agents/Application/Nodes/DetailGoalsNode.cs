@@ -26,6 +26,19 @@ internal sealed class DetailGoalsNode(
     public string? PendingQuestion(ConversationContext context) =>
         context.Draft is { Goals.Count: > 0 } draft ? GoalExtraction.Proposal(draft) : null;
 
+    // Coming from the classifier ("vamos falar da meta dos livros"): that goal first, then the rest of the queue.
+    // The message itself is not an answer to a proposal, so it is not run through RunAsync.
+    public async Task<NodeResult> EnterAsync(ConversationContext context, Guid? goalId, CancellationToken cancellationToken)
+    {
+        if (goalId is not { } id)
+        {
+            return NodeResult.NotExpected;
+        }
+
+        var rest = context.Draft?.DetailQueue?.Where(queued => queued != id) ?? [];
+        return await detailing.NextAsync(context, [id, .. rest], "Claro!", cancellationToken);
+    }
+
     public async Task<NodeResult> RunAsync(ConversationContext context, CancellationToken cancellationToken)
     {
         var draft = context.Draft;

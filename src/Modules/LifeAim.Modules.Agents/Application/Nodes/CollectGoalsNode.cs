@@ -22,6 +22,13 @@ internal sealed class CollectGoalsNode(IChatClient chatClient, TimeProvider time
         : context.SavedGoals.Count > 0 ? $"Quer adicionar mais alguma meta até {horizon.ToString("dd/MM/yyyy", PtBr)}?"
         : GoalsQuestion(horizon);
 
+    // Coming from another stage (detailing): what was in progress there is left behind, the period stays.
+    public Task<NodeResult> EnterAsync(ConversationContext context, Guid? goalId, CancellationToken cancellationToken)
+    {
+        context.Draft = GoalsDraft.Empty(context.Draft?.Horizon);
+        return RunAsync(context, cancellationToken);
+    }
+
     public async Task<NodeResult> RunAsync(ConversationContext context, CancellationToken cancellationToken)
     {
         List<ChatMessage> messages =
@@ -83,6 +90,9 @@ internal sealed class CollectGoalsNode(IChatClient chatClient, TimeProvider time
             Você ajuda o Pippin, um assistente que conversa em português para cadastrar as metas de vida do usuário.
             Hoje é {today.ToString("dddd, dd/MM/yyyy", PtBr)}.
             O Pippin perguntou: "{PendingQuestion(context)}". {agreedPeriod}
+            Metas que o usuário JÁ salvou: {(context.SavedGoals.Count == 0 ? "nenhuma" : string.Join("; ", context.SavedGoals.Select(g => g.Name)))}.
+            Se a mensagem fala de uma meta já salva (para detalhar, mudar ou comentar), ela NÃO é uma meta nova:
+            não a coloque em goals, e use aboutGoals false.
 
             O usuário pode responder do jeito que quiser: só o período, só as metas, tudo junto, várias metas numa frase.
             Extraia tudo o que a mensagem trouxer:
