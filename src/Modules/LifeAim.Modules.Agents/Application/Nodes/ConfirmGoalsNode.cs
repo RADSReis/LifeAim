@@ -76,6 +76,9 @@ internal sealed class ConfirmGoalsNode(IChatClient chatClient, IGoalService goal
                 return NodeResult.Answer(
                     needsChoice ? $"Preciso que você escolha uma das opções antes de salvar.\n\n{confirmation}" : confirmation);
 
+            case Decisions.Greeting:
+                return NodeResult.Greeting; // → greets back and repeats the confirmation
+
             default:
                 return NodeResult.NotExpected; // "other" → the router, which repeats the confirmation
         }
@@ -118,10 +121,12 @@ internal sealed class ConfirmGoalsNode(IChatClient chatClient, IGoalService goal
             Classifique a resposta do usuário em decision:
             - "{Decisions.Confirm}": concorda com as metas e quer salvar ("sim", "isso", "pode salvar", "perfeito").
             - "{Decisions.Change}": escolhe uma opção de uma dúvida, ou quer corrigir, remover ou acrescentar metas.
-            - "{Decisions.Other}": a mensagem não é sobre essas metas.
+            - "{Decisions.Greeting}": é apenas um cumprimento ou conversa social ("oi", "olá", "bom dia", "tudo bem?").
+            - "{Decisions.Other}": a mensagem não é sobre essas metas (uma pergunta ou pedido de outro assunto).
 
             goals: a lista COMPLETA e atualizada, aplicando o que o usuário disse; copie sem mudar as metas que ele não
-            mencionou; tire as que ele pediu para remover. Para "{Decisions.Other}", devolva a lista mostrada.
+            mencionou; tire as que ele pediu para remover. Para "{Decisions.Greeting}" e "{Decisions.Other}", devolva a
+            lista mostrada e as dúvidas como estão.
             doubts: as dúvidas que continuam sem escolha, copiadas como estão (pergunta e opções, sem as letras),
             mais alguma nova se a correção criou outra ambiguidade. Lista vazia se não sobrou nenhuma.
 
@@ -136,6 +141,7 @@ internal sealed class ConfirmGoalsNode(IChatClient chatClient, IGoalService goal
     {
         public const string Confirm = "confirm";
         public const string Change = "change";
+        public const string Greeting = "greeting";
         public const string Other = "other";
     }
 

@@ -138,6 +138,100 @@ public class PippinWorkflowTests
         Assert.Equal("Rafael Diniz dos Santos", _store.States[UserId].UserName);
     }
 
+    // ---------- Greetings: a greeting asks for nothing, so it never goes to the router ----------
+
+    private const string JustAGreeting =
+        """{ "aboutGoals": false, "isGreeting": true, "horizonDate": null, "goals": [], "doubts": [], "finished": false }""";
+
+    [Fact]
+    public async Task A_greeting_while_waiting_for_the_name_greets_back_and_asks_it_again()
+    {
+        var workflow = CreateWorkflow(new FakeChatClient("""{ "answeredTheQuestion": false, "name": null, "isGreeting": true }"""));
+        await workflow.ReplyAsync(Message("oi"));
+
+        var reply = await workflow.ReplyAsync(Message("olá"));
+
+        Assert.Equal("Oi! 😊 Como você se chama?", reply);
+        Assert.Equal(Stage.AskName, _store.States[UserId].Stage);
+    }
+
+    [Fact]
+    public async Task A_greeting_lists_the_saved_goals_and_asks_the_pending_question()
+    {
+        AtStage(Stage.CollectGoals, GoalsDraft.Empty(new DateOnly(2026, 12, 31)));
+        var goals = new FakeGoalService();
+        goals.Add(UserId, "Emagrecer até 90 kg", November.GetUtcNow().AddDays(-1));
+        goals.Add(UserId, "Ler 2 livros", November.GetUtcNow().AddDays(-1));
+        var workflow = CreateWorkflow(new FakeChatClient(JustAGreeting), goals);
+
+        var reply = await workflow.ReplyAsync(Message("olá"));
+
+        // UX item 11: greet back and list the goals; with goals saved, the question is about adding more.
+        Assert.Equal(
+            "Opa! Olá, Rafael! 😊\n\n**Suas metas:**\n- Emagrecer até 90 kg\n- Ler 2 livros\n\n" +
+            "Quer adicionar mais alguma meta até 31/12/2026?",
+            reply);
+        Assert.DoesNotContain(FallbackRouter.BackToQuestion, reply);
+        Assert.Equal(Stage.CollectGoals, _store.States[UserId].Stage);
+    }
+
+    [Fact]
+    public async Task A_greeting_lists_at_most_10_goals_and_marks_that_there_are_more()
+    {
+        AtStage(Stage.CollectGoals, GoalsDraft.Empty(new DateOnly(2026, 12, 31)));
+        var goals = new FakeGoalService();
+        for (var i = 1; i <= 12; i++)
+        {
+            goals.Add(UserId, $"Meta {i}", November.GetUtcNow().AddMinutes(i));
+        }
+
+        var reply = await CreateWorkflow(new FakeChatClient(JustAGreeting), goals).ReplyAsync(Message("oi"));
+
+        Assert.Contains("- Meta 10\n- ...\n\n", reply);
+        Assert.DoesNotContain("Meta 11", reply);
+    }
+
+    [Fact]
+    public async Task A_greeting_without_saved_goals_just_greets_and_asks_for_them()
+    {
+        AtStage(Stage.CollectGoals, GoalsDraft.Empty(new DateOnly(2026, 12, 31)));
+
+        var reply = await CreateWorkflow(new FakeChatClient(JustAGreeting)).ReplyAsync(Message("bom dia"));
+
+        Assert.Equal("Opa! Olá, Rafael! 😊 Quais metas você quer alcançar até 31/12/2026?", reply);
+    }
+
+    [Fact]
+    public async Task A_greeting_while_confirming_resumes_the_goals_waiting_for_confirmation()
+    {
+        AtStage(Stage.ConfirmGoals, ShownDraft());
+        var goals = new FakeGoalService();
+        goals.Add(UserId, "Correr 5 km", November.GetUtcNow().AddDays(-3)); // saved earlier: not listed here
+        var workflow = CreateWorkflow(new FakeChatClient(Confirmation("greeting", booksTarget: 2, keepDoubt: true)), goals);
+
+        var reply = await workflow.ReplyAsync(Message("oi"));
+
+        Assert.StartsWith("Opa! Olá, Rafael! 😊 Voltando de onde paramos:\n\nEntendi estas 2 metas", reply);
+        Assert.Contains("**A)** 3 livros", reply);
+        Assert.DoesNotContain("Suas metas", reply);
+        Assert.Equal(Stage.ConfirmGoals, _store.States[UserId].Stage);
+        Assert.Empty(goals.Created);
+    }
+
+    [Fact]
+    public async Task A_real_request_still_goes_to_the_router_with_the_question_about_more_goals()
+    {
+        AtStage(Stage.CollectGoals, GoalsDraft.Empty(new DateOnly(2026, 12, 31)));
+        var goals = new FakeGoalService();
+        goals.Add(UserId, "Ler 2 livros", November.GetUtcNow());
+        var workflow = CreateWorkflow(new FakeChatClient(
+            """{ "aboutGoals": false, "isGreeting": false, "horizonDate": null, "goals": [], "doubts": [], "finished": false }"""), goals);
+
+        var reply = await workflow.ReplyAsync(Message("qual a previsão do tempo?"));
+
+        Assert.EndsWith(FallbackRouter.BackToQuestion + "Quer adicionar mais alguma meta até 31/12/2026?", reply);
+    }
+
     // ---------- ③ Collecting goals ----------
 
     // What the AI returns for: "vamos definir objetivos até o fim desse ano, estou com 94 kg e quero emagrecer
@@ -335,17 +429,22 @@ public class PippinWorkflowTests
     private void AtStage(Stage stage, GoalsDraft? draft = null) =>
         _store.States[UserId] = new ConversationState(stage, "Rafael", draft);
 
-    private PippinWorkflow CreateWorkflow(IChatClient ai, FakeGoalService? goals = null) =>
-        new(
+    private PippinWorkflow CreateWorkflow(IChatClient ai, FakeGoalService? goals = null)
+    {
+        goals ??= new FakeGoalService();
+        return new(
             _store,
             [
                 new GreetingNode(),
                 new AskNameNode(ai, November),
                 new CollectGoalsNode(ai, November),
-                new ConfirmGoalsNode(ai, goals ?? new FakeGoalService(), November),
+                new ConfirmGoalsNode(ai, goals, November),
             ],
             new FallbackRouter(),
+            new GreetingReply(),
+            goals,
             NullLogger<PippinWorkflow>.Instance);
+    }
 
     private static PippinMessage Message(string text) => new(UserId, "rafael", text);
 

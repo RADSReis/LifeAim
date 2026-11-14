@@ -16,8 +16,11 @@ internal sealed class CollectGoalsNode(IChatClient chatClient, TimeProvider time
 
     public Stage Stage => Stage.CollectGoals;
 
+    // With goals already saved, the question is about adding more, not about the first ones.
     public string? PendingQuestion(ConversationContext context) =>
-        context.Draft?.Horizon is { } horizon ? GoalsQuestion(horizon) : GoalHorizon.Question(timeProvider);
+        context.Draft?.Horizon is not { } horizon ? GoalHorizon.Question(timeProvider)
+        : context.SavedGoals.Count > 0 ? $"Quer adicionar mais alguma meta até {horizon.ToString("dd/MM/yyyy", PtBr)}?"
+        : GoalsQuestion(horizon);
 
     public async Task<NodeResult> RunAsync(ConversationContext context, CancellationToken cancellationToken)
     {
@@ -47,6 +50,11 @@ internal sealed class CollectGoalsNode(IChatClient chatClient, TimeProvider time
         {
             return NodeResult.Answer(
                 "Fechado! Suas metas estão guardadas. 💪 Acompanhar o progresso delas é a próxima coisa que eu vou aprender.");
+        }
+
+        if (answer.IsGreeting)
+        {
+            return NodeResult.Greeting; // → greets back and repeats the question
         }
 
         if (!answer.AboutGoals)
@@ -81,6 +89,9 @@ internal sealed class CollectGoalsNode(IChatClient chatClient, TimeProvider time
 
             - aboutGoals: true se a mensagem fala do período ou de metas/objetivos; false para outro assunto
               (cumprimento, pergunta ou pedido sem relação com metas).
+            - isGreeting: true só quando a mensagem é apenas um cumprimento ou conversa social, sem metas e sem pedido
+              ("oi", "olá", "bom dia", "e aí, tudo bem?"). Cumprimento junto com metas ("oi! quero correr 5 km")
+              → isGreeting false, e extraia as metas.
             - horizonDate: a data final do período, no formato yyyy-MM-dd ("fim do ano" → 31/12 deste ano;
               "até junho" → último dia de junho). null se o usuário não disse.
             - goals: uma entrada por meta mencionada (lista vazia se nenhuma).
@@ -95,6 +106,7 @@ internal sealed class CollectGoalsNode(IChatClient chatClient, TimeProvider time
 
     internal sealed record GoalsAnswer(
         bool AboutGoals,
+        bool IsGreeting,
         string? HorizonDate,
         List<ExtractedGoal>? Goals,
         List<ExtractedDoubt>? Doubts,

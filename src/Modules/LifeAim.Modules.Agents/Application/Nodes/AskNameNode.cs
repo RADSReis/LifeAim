@@ -21,6 +21,8 @@ internal sealed class AskNameNode(IChatClient chatClient, TimeProvider timeProvi
         - name = o nome exatamente como o usuário quer ser chamado ("pode me chamar de Rafa" → "Rafa").
         - answeredTheQuestion = false, e name = null, para qualquer outra coisa: um cumprimento sem nome,
           uma pergunta, um pedido ou outro assunto.
+        - isGreeting = true só quando a mensagem é apenas um cumprimento ou conversa social, sem nome e sem pedido
+          ("oi", "olá", "bom dia", "e aí, tudo bem?"). Com um nome ("oi, sou o Rafael"), isGreeting = false.
         """;
 
     public const string Question = "Como você se chama?";
@@ -40,11 +42,15 @@ internal sealed class AskNameNode(IChatClient chatClient, TimeProvider timeProvi
         // Structured output: the model must answer with JSON matching NameAnswer, turned into the record.
         var response = await chatClient.GetResponseAsync<NameAnswer>(messages, cancellationToken: cancellationToken);
 
-        if (!response.TryGetResult(out var answer)
-            || !answer.AnsweredTheQuestion
-            || string.IsNullOrWhiteSpace(answer.Name))
+        if (!response.TryGetResult(out var answer))
         {
             return NodeResult.NotExpected; // → the router
+        }
+
+        if (!answer.AnsweredTheQuestion || string.IsNullOrWhiteSpace(answer.Name))
+        {
+            // A greeting → greets back and asks the name again; anything else → the router.
+            return answer.IsGreeting ? NodeResult.Greeting : NodeResult.NotExpected;
         }
 
         context.UserName = PersonName.Capitalize(answer.Name);
@@ -56,5 +62,5 @@ internal sealed class AskNameNode(IChatClient chatClient, TimeProvider timeProvi
         return NodeResult.Answer(reply, nextStage: Stage.CollectGoals);
     }
 
-    internal sealed record NameAnswer(bool AnsweredTheQuestion, string? Name);
+    internal sealed record NameAnswer(bool AnsweredTheQuestion, string? Name, bool IsGreeting = false);
 }

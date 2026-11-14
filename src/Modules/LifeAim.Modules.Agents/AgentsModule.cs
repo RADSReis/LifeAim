@@ -41,6 +41,7 @@ public static class AgentsModule
         services.AddSingleton<INode, CollectGoalsNode>();
         services.AddSingleton<INode, ConfirmGoalsNode>();
         services.AddSingleton<FallbackRouter>();
+        services.AddSingleton<GreetingReply>();
         services.AddSingleton<IPippin, PippinWorkflow>();
         services.AddSingleton<IConversationReset, ConversationReset>();
 

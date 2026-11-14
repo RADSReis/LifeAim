@@ -1,3 +1,5 @@
+using LifeAim.Modules.Goals.Contracts;
+
 namespace LifeAim.Modules.Agents.Application.Workflow;
 
 /// <summary>
@@ -24,6 +26,9 @@ internal sealed class ConversationContext
 
     /// <summary>Goals understood but not confirmed yet, and the chosen period.</summary>
     public GoalsDraft? Draft { get; set; }
+
+    /// <summary>The user's goals already saved, read from the Goals module at the start of the message.</summary>
+    public IReadOnlyList<GoalDto> SavedGoals { get; init; } = [];
 }
 
 internal enum ConversationRole

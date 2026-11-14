@@ -80,14 +80,23 @@ internal sealed class FakeGoalService : IGoalService
 {
     public List<CreateGoalRequest> Created { get; } = [];
 
+    /// <summary>Every goal "in the database": the ones a test put there plus the ones Pippin created.</summary>
+    public List<GoalDto> Saved { get; } = [];
+
     public Task<GoalDto> CreateAsync(CreateGoalRequest request, CancellationToken cancellationToken = default)
     {
         Created.Add(request);
-        return Task.FromResult(new GoalDto(
+        var goal = new GoalDto(
             Guid.CreateVersion7(), request.UserId, request.Name, request.Description, request.Indicator,
-            request.DueDate, request.StartValue, request.TargetValue, request.Unit, DateTimeOffset.UtcNow));
+            request.DueDate, request.StartValue, request.TargetValue, request.Unit, DateTimeOffset.UtcNow);
+        Saved.Add(goal);
+        return Task.FromResult(goal);
     }
 
     public Task<IReadOnlyList<GoalDto>> ListAsync(Guid userId, CancellationToken cancellationToken = default) =>
-        throw new NotSupportedException();
+        Task.FromResult<IReadOnlyList<GoalDto>>(Saved.Where(g => g.UserId == userId).ToList());
+
+    /// <summary>A goal saved earlier, at <paramref name="createdAt"/>.</summary>
+    public void Add(Guid userId, string name, DateTimeOffset createdAt) =>
+        Saved.Add(new GoalDto(Guid.CreateVersion7(), userId, name, null, null, null, null, null, null, createdAt));
 }

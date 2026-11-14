@@ -21,15 +21,19 @@ internal interface INode
 /// <summary>What a node did with the message.</summary>
 internal sealed record NodeResult
 {
-    private NodeResult(bool expected, string? reply, Stage? nextStage)
+    private NodeResult(bool expected, string? reply, Stage? nextStage, bool isGreeting = false)
     {
         Expected = expected;
         Reply = reply;
         NextStage = nextStage;
+        IsGreeting = isGreeting;
     }
 
     /// <summary>False when the message was not what this node waits for: the router takes over.</summary>
     public bool Expected { get; }
+
+    /// <summary>The message was only a greeting: the workflow greets back and repeats the pending question.</summary>
+    public bool IsGreeting { get; }
 
     public string? Reply { get; }
 
@@ -39,4 +43,6 @@ internal sealed record NodeResult
     public static NodeResult Answer(string reply, Stage? nextStage = null) => new(true, reply, nextStage);
 
     public static NodeResult NotExpected { get; } = new(false, null, null);
+
+    public static NodeResult Greeting { get; } = new(false, null, null, isGreeting: true);
 }

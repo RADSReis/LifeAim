@@ -155,6 +155,63 @@ public sealed class PippinRealAiTests(RealAiApiFactory factory, ITestOutputHelpe
         Assert.Equal(expectedTarget, Assert.Single(await GoalsAsync()).TargetValue);
     }
 
+    private const string PeriodOnly = """{ "horizon": "2026-12-31", "goals": [], "doubts": [] }""";
+
+    [RealAiTheory]
+    [InlineData("olá")]
+    [InlineData("bom dia!")]
+    [InlineData("e aí, tudo bem?")]
+    public async Task A_greeting_lists_the_goals_instead_of_going_to_the_router(string greeting)
+    {
+        await SeedAsync("CollectGoals", PeriodOnly);
+        await SeedGoalAsync("Emagrecer até 90 kg", RealAiApiFactory.Now.AddDays(-1));
+        await SeedGoalAsync("Ler 2 livros", RealAiApiFactory.Now.AddDays(-1).AddMinutes(1));
+
+        var reply = await Send(greeting);
+
+        Assert.Equal(
+            "Opa! Olá, Rafael! 😊\n\n**Suas metas:**\n- Emagrecer até 90 kg\n- Ler 2 livros\n\n" +
+            "Quer adicionar mais alguma meta até 31/12/2026?",
+            reply);
+    }
+
+    [RealAiFact]
+    public async Task A_greeting_while_waiting_for_the_name_asks_it_again()
+    {
+        await SeedAsync("AskName", draft: null);
+        await using (var noName = Db.CreateCommand("UPDATE agents.conversations SET user_name = NULL WHERE user_id = $1"))
+        {
+            noName.Parameters.Add(new() { Value = _userId });
+            await noName.ExecuteNonQueryAsync();
+        }
+
+        Assert.Equal("Oi! 😊 Como você se chama?", await Send("oi"));
+    }
+
+    [RealAiFact]
+    public async Task A_greeting_while_confirming_repeats_the_choice_and_saves_nothing()
+    {
+        await SeedAsync("ConfirmGoals", BooksDraftWithDoubt);
+
+        var reply = await Send("oi");
+
+        Assert.StartsWith("Opa! Olá, Rafael! 😊 Voltando de onde paramos:", reply);
+        Assert.Contains("**A)** 3 livros", reply);
+        Assert.Single((await StateAsync()).Doubts);
+        Assert.Empty(await GoalsAsync());
+    }
+
+    [RealAiFact]
+    public async Task A_greeting_with_a_goal_is_about_the_goal()
+    {
+        await SeedAsync("CollectGoals", PeriodOnly);
+
+        var reply = await Send("oi! quero correr 5 km até o fim do ano");
+
+        Assert.Equal("ConfirmGoals", (await StateAsync()).Stage);
+        Assert.Contains("5", reply);
+    }
+
     // What Pippin would have shown for the books part of the sentence: one goal and a choice A/B.
     private const string BooksDraftWithDoubt =
         """
@@ -242,8 +299,20 @@ public sealed class PippinRealAiTests(RealAiApiFactory factory, ITestOutputHelpe
             "INSERT INTO agents.conversations (user_id, stage, user_name, updated_at, draft) VALUES ($1, $2, 'Rafael', $3, $4)");
         command.Parameters.Add(new() { Value = _userId });
         command.Parameters.Add(new() { Value = stage });
-        command.Parameters.Add(new() { Value = RealAiApiFactory.Now });
+        command.Parameters.Add(new() { Value = RealAiApiFactory.Now.AddHours(-1) });
         command.Parameters.Add(new() { Value = (object?)draft ?? DBNull.Value, NpgsqlDbType = NpgsqlDbType.Jsonb });
+        await command.ExecuteNonQueryAsync();
+    }
+
+    // A goal saved at a chosen moment (IGoalService would stamp it with the test clock's "now").
+    private async Task SeedGoalAsync(string name, DateTimeOffset createdAt)
+    {
+        await using var command = Db.CreateCommand(
+            "INSERT INTO goals.goals (id, user_id, name, created_at) VALUES ($1, $2, $3, $4)");
+        command.Parameters.Add(new() { Value = Guid.CreateVersion7() });
+        command.Parameters.Add(new() { Value = _userId });
+        command.Parameters.Add(new() { Value = name });
+        command.Parameters.Add(new() { Value = createdAt });
         await command.ExecuteNonQueryAsync();
     }
 

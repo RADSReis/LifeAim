@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using LifeAim.Modules.Agents.Contracts;
 using LifeAim.Modules.Agents.Infrastructure.Ai;
+using LifeAim.Modules.Goals.Contracts;
 using Microsoft.Extensions.Logging;
 
 namespace LifeAim.Modules.Agents.Application.Workflow;
@@ -24,6 +25,8 @@ internal sealed class PippinWorkflow : IPippin
 
     private readonly IConversationStore _store;
     private readonly FallbackRouter _router;
+    private readonly GreetingReply _greeting;
+    private readonly IGoalService _goals;
     private readonly ILogger<PippinWorkflow> _logger;
     private readonly Dictionary<Stage, INode> _nodes;
 
@@ -31,10 +34,14 @@ internal sealed class PippinWorkflow : IPippin
         IConversationStore store,
         IEnumerable<INode> nodes,
         FallbackRouter router,
+        GreetingReply greeting,
+        IGoalService goals,
         ILogger<PippinWorkflow> logger)
     {
         _store = store;
         _router = router;
+        _greeting = greeting;
+        _goals = goals;
         _logger = logger;
         _nodes = nodes.ToDictionary(node => node.Stage);
     }
@@ -56,6 +63,7 @@ internal sealed class PippinWorkflow : IPippin
                 Stage = state.Stage,
                 UserName = state.UserName,
                 Draft = state.Draft,
+                SavedGoals = state.Stage == Stage.Greeting ? [] : await _goals.ListAsync(message.UserId, cancellationToken),
             };
             var stageOfThisMessage = context.Stage;
 
@@ -93,7 +101,15 @@ internal sealed class PippinWorkflow : IPippin
         {
             var node = _nodes[context.Stage];
             var result = await node.RunAsync(context, cancellationToken);
-            return result.Expected ? result : _router.Route(node.PendingQuestion(context));
+            if (result.Expected)
+            {
+                return result;
+            }
+
+            // A greeting asks for nothing: greet back. Anything else unexpected is a request → the router.
+            return result.IsGreeting
+                ? NodeResult.Answer(_greeting.Reply(context, node.PendingQuestion(context)))
+                : _router.Route(node.PendingQuestion(context));
         }
         catch (AiNotConfiguredException)
         {
