@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using LifeAim.Modules.Agents.Application.Workflow;
 using Npgsql;
 using NpgsqlTypes;
@@ -26,8 +27,12 @@ internal sealed class ConversationStore(NpgsqlDataSource dataSource, TimeProvide
             reader.IsDBNull(2) ? null : JsonSerializer.Deserialize<GoalsDraft>(reader.GetString(2), Json));
     }
 
-    // camelCase, like the rest of LifeAim's JSON; DateOnly is written as "2026-12-25".
-    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+    // camelCase, like the rest of LifeAim's JSON; DateOnly is written as "2026-12-25"; enums as text ("weekly"),
+    // so reordering an enum never changes the meaning of a draft already saved.
+    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+    };
 
     public async Task<IReadOnlyList<ConversationTurn>> RecentMessagesAsync(
         Guid userId,

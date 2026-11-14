@@ -88,7 +88,7 @@ internal sealed class FakeGoalService : IGoalService
         Created.Add(request);
         var goal = new GoalDto(
             Guid.CreateVersion7(), request.UserId, request.Name, request.Description, request.Indicator,
-            request.DueDate, request.StartValue, request.TargetValue, request.Unit, DateTimeOffset.UtcNow);
+            request.DueDate, request.StartValue, request.TargetValue, request.Unit, DateTimeOffset.UtcNow, request.UserPlan);
         Saved.Add(goal);
         return Task.FromResult(goal);
     }
@@ -111,10 +111,36 @@ internal sealed class FakeGoalService : IGoalService
         {
             Name = request.Name, Description = request.Description, Indicator = request.Indicator,
             DueDate = request.DueDate, StartValue = request.StartValue, TargetValue = request.TargetValue,
-            Unit = request.Unit,
+            Unit = request.Unit, UserPlan = request.UserPlan,
         };
         return Task.FromResult<GoalDto?>(Saved[index]);
     }
+
+    /// <summary>Every plan Pippin saved: the goal and its routines, in order.</summary>
+    public List<(Guid GoalId, IReadOnlyList<RoutineInput> Routines)> RoutinesReplaced { get; } = [];
+
+    public Task<IReadOnlyList<RoutineDto>?> ReplaceRoutinesAsync(
+        Guid goalId,
+        Guid userId,
+        IReadOnlyList<RoutineInput> routines,
+        CancellationToken cancellationToken = default)
+    {
+        if (!Saved.Any(g => g.Id == goalId && g.UserId == userId))
+        {
+            return Task.FromResult<IReadOnlyList<RoutineDto>?>(null);
+        }
+
+        RoutinesReplaced.Add((goalId, routines));
+        return Task.FromResult<IReadOnlyList<RoutineDto>?>(routines.Select(r => ToDto(goalId, r)).ToList());
+    }
+
+    public Task<IReadOnlyList<RoutineDto>> ListRoutinesAsync(Guid userId, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<RoutineDto>>(
+            RoutinesReplaced.GroupBy(r => r.GoalId).SelectMany(g => g.Last().Routines.Select(r => ToDto(g.Key, r))).ToList());
+
+    private static RoutineDto ToDto(Guid goalId, RoutineInput r) =>
+        new(Guid.CreateVersion7(), goalId, r.Activity, r.Frequency, r.Interval, r.DaysOfWeek ?? [], r.TimesPerPeriod,
+            r.TimeOfDay, r.DayPeriod, r.Amount, r.Unit, r.DurationMinutes, r.Source, r.StartsOn, r.EndsOn, DateTimeOffset.UtcNow);
 
     /// <summary>A goal saved earlier, at <paramref name="createdAt"/> (only the name: not plannable yet).</summary>
     public GoalDto Add(Guid userId, string name, DateTimeOffset createdAt)

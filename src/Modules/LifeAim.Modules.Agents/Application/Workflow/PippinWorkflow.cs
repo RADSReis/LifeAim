@@ -109,10 +109,31 @@ internal sealed class PippinWorkflow : IPippin
                 return result;
             }
 
+            // The node already acted and moved on (an ignored confirmation taken as "sim"): the message is
+            // handled from the new stage, by its node first ("quero adicionar outra meta" → CollectGoals), and
+            // the reply starts with what was done. Only once: a second move is treated as not understood.
+            var note = result.Note;
+            if (result.NextStage is { } moved)
+            {
+                _logger.LogInformation("Pippin workflow: {From} → {To} before handling the message", context.Stage, moved);
+                context.Stage = moved;
+                node = _nodes[moved];
+
+                result = await node.RunAsync(context, cancellationToken);
+                if (result.Expected)
+                {
+                    return NodeResult.Answer($"{note}\n\n{result.Reply}", result.NextStage);
+                }
+            }
+
             // A greeting asks for nothing: greet back. Anything else unexpected → the path classifier decides.
-            return result.IsGreeting
+            var handled = result.IsGreeting
                 ? NodeResult.Answer(_greeting.Reply(context, node.PendingQuestion(context)))
                 : await FindPathAsync(context, node, cancellationToken);
+
+            return note is null
+                ? handled
+                : NodeResult.Answer($"{note}\n\n{handled.Reply}", handled.NextStage);
         }
         catch (AiNotConfiguredException)
         {

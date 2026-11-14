@@ -1,3 +1,5 @@
+using LifeAim.Modules.Goals.Contracts;
+
 namespace LifeAim.Modules.Agents.Application.Workflow;
 
 /// <summary>
@@ -9,15 +11,19 @@ namespace LifeAim.Modules.Agents.Application.Workflow;
 /// <param name="Doubts">What was ambiguous, asked as a choice; nothing is saved while one is open.</param>
 /// <param name="DetailQueue">
 /// While detailing (Stage.DetailGoals): the ids of the saved goals still to detail, the first one in focus.
-/// <see cref="Goals"/> then holds the single proposal shown for that goal.
+/// <see cref="Goals"/> then holds that single goal, with what the user added in this conversation.
 /// </param>
-/// <param name="Assumptions">What the proposal assumed, shown to the user ("prazo: o fim do período").</param>
+/// <param name="Assumptions">What Pippin assumed in the plan it shows ("10 páginas por dia").</param>
+/// <param name="Question">While detailing: the one question Pippin asked about the goal in focus.</param>
+/// <param name="Plan">While detailing: the plan Pippin understood (or proposed), waiting for confirmation.</param>
 internal sealed record GoalsDraft(
     DateOnly? Horizon,
     IReadOnlyList<GoalDraft> Goals,
     IReadOnlyList<GoalDoubt> Doubts,
     IReadOnlyList<Guid>? DetailQueue = null,
-    IReadOnlyList<string>? Assumptions = null)
+    IReadOnlyList<string>? Assumptions = null,
+    string? Question = null,
+    PlanDraft? Plan = null)
 {
     public static GoalsDraft Empty(DateOnly? horizon) => new(horizon, [], []);
 }
@@ -29,6 +35,7 @@ internal sealed record GoalsDraft(
 internal sealed record GoalDoubt(string Question, IReadOnlyList<string> Options);
 
 /// <summary>One goal as understood from the conversation; becomes a CreateGoalRequest when confirmed.</summary>
+/// <param name="UserPlan">How the user said they will reach it, in their own words.</param>
 internal sealed record GoalDraft(
     string Name,
     string? Description,
@@ -36,4 +43,11 @@ internal sealed record GoalDraft(
     decimal? StartValue,
     decimal? TargetValue,
     string? Unit,
-    DateOnly? DueDate);
+    DateOnly? DueDate,
+    string? UserPlan = null);
+
+/// <summary>
+/// The plan of the goal in focus, broken into routines (goals.goal_routines), as Pippin understood it from
+/// the user's answer or proposed it himself. Saved only after the user confirms (or ignores the confirmation).
+/// </summary>
+internal sealed record PlanDraft(IReadOnlyList<RoutineInput> Routines, RoutineSource Source);

@@ -67,13 +67,12 @@ internal sealed class ConfirmGoalsNode(
                 context.Draft = GoalsDraft.Empty(draft.Horizon);
                 var savedText = $"Salvei! ✅\n{GoalExtraction.List(updated)}";
 
-                // Goals missing what makes them plannable are detailed now, one at a time (→ DetailGoals).
-                var toDetail = GoalDetailing.NotPlannable(saved);
-                return toDetail.Count == 0
-                    ? NodeResult.Answer($"{savedText}\n\nQuer adicionar mais alguma meta? É só me contar.", nextStage: Stage.CollectGoals)
-                    : await detailing.NextAsync(
-                        context, toDetail, $"{savedText}\n\nAgora vamos deixar cada meta pronta para planejar, uma de cada vez.",
-                        cancellationToken);
+                // Straight to deepening every goal just saved, one at a time (→ DetailGoals): one question each.
+                return await detailing.NextAsync(
+                    context,
+                    saved.Select(goal => goal.Id),
+                    $"{savedText}\n\nAgora vamos ver como você vai chegar lá, uma meta de cada vez.",
+                    cancellationToken);
 
             case Decisions.Change when updated.Count == 0:
                 context.Draft = GoalsDraft.Empty(draft.Horizon);
@@ -102,7 +101,7 @@ internal sealed class ConfirmGoalsNode(
             saved.Add(await goals.CreateAsync(
                 new CreateGoalRequest(
                     userId, goal.Name, goal.Description, goal.Indicator, goal.DueDate,
-                    goal.StartValue, goal.TargetValue, goal.Unit),
+                    goal.StartValue, goal.TargetValue, goal.Unit, goal.UserPlan),
                 cancellationToken));
         }
 
@@ -113,8 +112,7 @@ internal sealed class ConfirmGoalsNode(
     private string Instructions(GoalsDraft draft)
     {
         var today = GoalHorizon.Today(timeProvider);
-        var shownGoals = draft.Goals.Select(g => new ExtractedGoal(
-            g.Name, g.Description, g.Indicator, g.StartValue, g.TargetValue, g.Unit, g.DueDate?.ToString("yyyy-MM-dd")));
+        var shownGoals = draft.Goals.Select(GoalExtraction.ToExtracted);
 
         return $"""
             Você ajuda o Pippin, um assistente que conversa em português para cadastrar as metas de vida do usuário.

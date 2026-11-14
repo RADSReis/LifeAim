@@ -7,28 +7,27 @@ using Microsoft.Extensions.AI;
 namespace LifeAim.Modules.Agents.Application.Nodes;
 
 /// <summary>
-/// Detailing saved goals one at a time (UX "Cadastro e aprofundamento das metas"), shared by the node that
-/// saves them (ConfirmGoals, to start) and the node that details them (DetailGoals, to go on):
-/// the next goal in the queue gets a proposal from the AI; with none left, the general summary.
+/// Deepening the saved goals one at a time (UX "Cadastro e aprofundamento das metas"), shared by the node that
+/// saves them (ConfirmGoals, to start) and the node that deepens them (DetailGoals, to go on): the next goal in
+/// the queue gets ONE contextual question from the AI (what is missing + the plan); with none left, the summary.
 /// </summary>
 internal sealed class GoalDetailing(IChatClient chatClient, IGoalService goals, TimeProvider timeProvider)
 {
     private static readonly CultureInfo PtBr = CultureInfo.GetCultureInfo("pt-BR");
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
-    /// <summary>The saved goals the conversation should still detail: the ones that are not plannable yet.</summary>
-    public static List<Guid> NotPlannable(IEnumerable<GoalDto> saved) =>
-        saved.Where(g => !GoalExtraction.IsPlannable(g.Indicator, g.TargetValue, g.DueDate)).Select(g => g.Id).ToList();
-
     /// <summary>
-    /// Proposes the first goal of <paramref name="queue"/> (→ DetailGoals) or, when none is left, shows the
+    /// Asks about the first goal of <paramref name="queue"/> (→ DetailGoals) or, when none is left, shows the
     /// summary of all goals (→ CollectGoals). <paramref name="prefix"/> opens the reply ("Salvei! ✅").
+    /// Without <paramref name="withQuestion"/> the reply leaves out the question that ends it (the next goal's
+    /// question, or "quer adicionar mais?"), for when another part of the workflow will ask its own.
     /// </summary>
     public async Task<NodeResult> NextAsync(
         ConversationContext context,
         IEnumerable<Guid> queue,
         string prefix,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool withQuestion = true)
     {
         var horizon = context.Draft?.Horizon;
         var saved = await goals.ListAsync(context.UserId, cancellationToken);
@@ -40,76 +39,79 @@ internal sealed class GoalDetailing(IChatClient chatClient, IGoalService goals, 
             var more = horizon is { } date
                 ? $"Quer adicionar mais alguma meta até {date.ToString("dd/MM/yyyy", PtBr)}?"
                 : "Quer adicionar mais alguma meta?";
-            return NodeResult.Answer(
-                $"{prefix}\n\nPronto, terminamos de detalhar! 🎉\n\n**Resumo das suas metas:**\n" +
-                $"{GoalExtraction.List(saved.Select(GoalExtraction.FromSaved))}\n\n{more}",
-                nextStage: Stage.CollectGoals);
+            var summary = $"{prefix}\n\nPronto, terminamos! 🎉\n\n{GoalPlan.Summary(saved)}";
+            return NodeResult.Answer(withQuestion ? $"{summary}\n\n{more}" : summary, nextStage: Stage.CollectGoals);
         }
 
-        var goal = saved.First(g => g.Id == remaining[0]);
-        context.Draft = await ProposeAsync(goal, remaining, horizon, cancellationToken);
-        return NodeResult.Answer($"{prefix}\n\n{GoalExtraction.Proposal(context.Draft)}", nextStage: Stage.DetailGoals);
+        var goal = GoalExtraction.FromSaved(saved.First(g => g.Id == remaining[0]));
+        var question = await AskAsync(goal, horizon, cancellationToken);
+        context.Draft = new GoalsDraft(horizon, [goal], [], remaining, Question: question);
+        return NodeResult.Answer(withQuestion ? $"{prefix}\n\n{question}" : prefix, nextStage: Stage.DetailGoals);
     }
 
-    // One AI call: complete what the goal misses, with reasonable assumptions the user will check.
-    private async Task<GoalsDraft> ProposeAsync(
-        GoalDto goal,
-        IReadOnlyList<Guid> queue,
-        DateOnly? horizon,
-        CancellationToken cancellationToken)
+    /// <summary>The goal with what the user added, and its plan, written to the Goals module.</summary>
+    public async Task SaveAsync(Guid userId, Guid goalId, GoalDraft goal, PlanDraft? plan, CancellationToken cancellationToken)
+    {
+        await goals.UpdateAsync(
+            new UpdateGoalRequest(
+                goalId, userId, goal.Name, goal.Description, goal.Indicator, goal.DueDate,
+                goal.StartValue, goal.TargetValue, goal.Unit, goal.UserPlan),
+            cancellationToken);
+
+        if (plan is { Routines.Count: > 0 })
+        {
+            // A routine runs from today until the goal's due date, unless the user said otherwise.
+            var today = GoalHorizon.Today(timeProvider);
+            var routines = plan.Routines
+                .Select(r => r with { StartsOn = r.StartsOn ?? today, EndsOn = r.EndsOn ?? Later(goal.DueDate, today) })
+                .ToList();
+            await goals.ReplaceRoutinesAsync(goalId, userId, routines, cancellationToken);
+        }
+    }
+
+    private static DateOnly? Later(DateOnly? due, DateOnly today) => due is { } date && date >= today ? date : null;
+
+    /// <summary>The fallback when the AI fails: still one question, still offering a proposal.</summary>
+    public static string DefaultQuestion(GoalDraft goal) =>
+        $"Para conseguir **{goal.Name}**, qual o seu plano? Me diga em poucas palavras, ou se quiser eu posso propor um plano para você.";
+
+    // One AI call writes the one question for this goal (Funcionalidade 1, decision 2: one broad, smart question).
+    private async Task<string> AskAsync(GoalDraft goal, DateOnly? horizon, CancellationToken cancellationToken)
     {
         List<ChatMessage> messages = [new(ChatRole.System, Instructions(goal, horizon))];
-        var response = await chatClient.GetResponseAsync<ProposalAnswer>(messages, cancellationToken: cancellationToken);
+        var response = await chatClient.GetResponseAsync<QuestionAnswer>(messages, cancellationToken: cancellationToken);
 
-        var asSaved = GoalExtraction.FromSaved(goal);
-        if (!response.TryGetResult(out var answer))
-        {
-            return new GoalsDraft(horizon, [asSaved], [], queue); // shows the goal as it is; the user can still adjust
-        }
-
-        var proposal = GoalExtraction.ToDrafts(answer.Goal is null ? [] : [answer.Goal], horizon).FirstOrDefault() ?? asSaved;
-        return new GoalsDraft(
-            horizon,
-            [proposal],
-            GoalExtraction.ToDoubts(answer.Doubts),
-            queue,
-            GoalExtraction.CleanAssumptions(answer.Assumptions));
+        return response.TryGetResult(out var answer) && !string.IsNullOrWhiteSpace(answer.Question)
+            ? answer.Question.Trim()
+            : DefaultQuestion(goal);
     }
 
-    private string Instructions(GoalDto goal, DateOnly? horizon)
+    private string Instructions(GoalDraft goal, DateOnly? horizon)
     {
         var today = GoalHorizon.Today(timeProvider);
-        var saved = new ExtractedGoal(
-            goal.Name, goal.Description, goal.Indicator, goal.StartValue, goal.TargetValue, goal.Unit,
-            goal.DueDate?.ToString("yyyy-MM-dd"));
-
         return $"""
-            Você ajuda o Pippin, um assistente que conversa em português para cadastrar as metas de vida do usuário.
-            Hoje é {today.ToString("dddd, dd/MM/yyyy", PtBr)}.{(horizon is { } h ? $" O período combinado vai até {h:yyyy-MM-dd}." : "")}
+            Você ajuda o Pippin, um assistente que conversa em português, de forma leve e natural, para cadastrar as
+            metas de vida do usuário. Hoje é {today.ToString("dddd, dd/MM/yyyy", PtBr)}.{(horizon is { } h ? $" O período combinado vai até {h:yyyy-MM-dd}." : "")}
 
-            O usuário já salvou esta meta (JSON):
-            {JsonSerializer.Serialize(saved, Json)}
+            O usuário acabou de salvar esta meta (JSON):
+            {JsonSerializer.Serialize(GoalExtraction.ToExtracted(goal), Json)}
 
-            Sua tarefa: completar o que falta para ela ficar planejável: indicator (o que se mede), targetValue (quanto)
-            e dueDate (até quando); unit e startValue quando fizerem sentido. O usuário vai conferir a proposta.
-            - Mantenha o que já está preenchido; mude só o que estiver claramente incoerente.
-            - Para o que falta, proponha uma suposição razoável a partir do nome, da descrição e do período. Aqui você
-              PODE propor valores que o usuário não disse. Ex.: "Ler mais" → indicator "livros terminados",
-              targetValue 2, unit "livros"; sem prazo → o fim do período.
-            - Uma meta que não parece mensurável ("ser mais feliz") ganha um indicador concreto e simples
-              ("dias da semana em que me senti bem").
-            - goal.name: o mesmo nome; ajuste só para refletir o número proposto ("Ler mais" → "Ler 2 livros").
-            - assumptions: no máximo 2 frases curtas (até 8 palavras), dirigidas ao usuário, dizendo por que você
-              escolheu o que não estava na meta. Não repita os campos que já aparecem na proposta ("indicador: ...")
-              e não comente o nome nem a unidade. Ex.: ["3 livros é um bom ritmo até dezembro", "prazo no fim do período"].
-              Lista vazia se não supôs nada.
-            - doubts: só quando uma suposição for arriscada e mudar muito a meta.
-
-            {GoalExtraction.GoalFieldRules}
-
-            {GoalExtraction.DoubtRules}
+            Escreva UMA única mensagem curta para aprofundar esta meta: uma pergunta de no máximo 25 palavras, mais a
+            frase final abaixo. Ela será a única pergunta sobre esta meta, então junte nela o essencial que falta,
+            em linguagem de conversa, sem listar possibilidades nem pedir detalhes demais (não é um formulário):
+            - O valor de HOJE, quando a meta mede um estado que já existe (peso, dinheiro guardado, km que já corre)
+              e startValue é null. Ex.: "quanto você pesa hoje?". Metas de quantidade a fazer no período ("ler 2 livros")
+              começam do zero: não pergunte valor de hoje.
+            - O que muda o esforço, quando fizer sentido para esse tipo de meta (o tamanho dos livros, por exemplo).
+            - O plano: como ele pretende chegar lá (dias, horários, quanto por vez). Se userPlan já diz isso, pergunte
+              só o que falta no plano.
+            - Termine oferecendo ajuda, com estas palavras: "Me diga em poucas palavras, ou se quiser eu posso propor
+              um plano para você."
+            Não repita o que já está na meta. Não use listas. Use **negrito** no nome da meta.
+            Ex.: "Para chegar a **90 kg** até o Natal, quanto você pesa hoje e qual o seu plano? Me diga em poucas
+            palavras, ou se quiser eu posso propor um plano para você."
             """;
     }
 
-    internal sealed record ProposalAnswer(ExtractedGoal? Goal, List<string>? Assumptions, List<ExtractedDoubt>? Doubts);
+    internal sealed record QuestionAnswer(string? Question);
 }

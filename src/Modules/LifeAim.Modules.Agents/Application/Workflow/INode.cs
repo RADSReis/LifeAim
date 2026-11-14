@@ -29,13 +29,20 @@ internal interface INode
 /// <summary>What a node did with the message.</summary>
 internal sealed record NodeResult
 {
-    private NodeResult(bool expected, string? reply, Stage? nextStage, bool isGreeting = false)
+    private NodeResult(bool expected, string? reply, Stage? nextStage, bool isGreeting = false, string? note = null)
     {
         Expected = expected;
         Reply = reply;
         NextStage = nextStage;
         IsGreeting = isGreeting;
+        Note = note;
     }
+
+    /// <summary>
+    /// With <see cref="Expected"/> false: something the node already did before finding out the message was not
+    /// for it ("Salvei o plano! ✅"). The workflow puts it at the start of whatever reply handles the message.
+    /// </summary>
+    public string? Note { get; }
 
     /// <summary>False when the message was not what this node waits for: the router takes over.</summary>
     public bool Expected { get; }
@@ -53,4 +60,11 @@ internal sealed record NodeResult
     public static NodeResult NotExpected { get; } = new(false, null, null);
 
     public static NodeResult Greeting { get; } = new(false, null, null, isGreeting: true);
+
+    /// <summary>
+    /// The node acted (e.g. took an ignored confirmation as a "sim" and saved) and moved the conversation to
+    /// <paramref name="movedTo"/>, but the message itself is about something else: the workflow handles it from
+    /// there (greeting or path classifier) and starts the reply with <paramref name="note"/>.
+    /// </summary>
+    public static NodeResult NotExpectedAfter(string note, Stage? movedTo) => new(false, null, movedTo, note: note);
 }

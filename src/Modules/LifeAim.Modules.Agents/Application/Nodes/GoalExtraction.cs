@@ -17,7 +17,8 @@ internal sealed record ExtractedGoal(
     decimal? StartValue,
     decimal? TargetValue,
     string? Unit,
-    string? DueDate);
+    string? DueDate,
+    string? UserPlan = null);
 
 /// <summary>A doubt as the AI returns it: the question and its options (without letters; the code adds them).</summary>
 internal sealed record ExtractedDoubt(string Question, List<string>? Options);
@@ -45,17 +46,12 @@ internal static class GoalExtraction
         - unit: a unidade dos valores ("kg", "livros", "km"), ou null.
         - dueDate: o prazo desta meta no formato yyyy-MM-dd. Se a meta tem prazo próprio, use-o ("até o natal" → 25/12);
           senão use o fim do período escolhido; null se nada foi dito.
+        - userPlan: como o usuário disse que vai atingir a meta (dias, horários, quanto por vez, estratégia),
+          copiado com as palavras dele ("vou ler segunda, quarta e sexta de manhã"); null se ele não disse.
         """;
 
     /// <summary>For the nodes that only understand what the user said (not for the one that proposes).</summary>
     public const string NoInventionRule = "Nunca invente metas, números ou datas que o usuário não disse.";
-
-    /// <summary>
-    /// A goal is plannable when it says what is measured, how much and until when (Funcionalidade 1:
-    /// "nome, prazo e indicador mensurável"). The start value and unit depend on the goal, so they are optional.
-    /// </summary>
-    public static bool IsPlannable(string? indicator, decimal? targetValue, DateOnly? dueDate) =>
-        indicator is not null && targetValue is not null && dueDate is not null;
 
     /// <summary>How the AI must write doubts: always a choice, never a yes/no question. Part of both prompts.</summary>
     public const string DoubtRules =
@@ -97,7 +93,8 @@ internal static class GoalExtraction
                 g.StartValue,
                 g.TargetValue,
                 Blank(g.Unit),
-                ParseDate(g.DueDate) ?? horizon))
+                ParseDate(g.DueDate) ?? horizon,
+                Blank(g.UserPlan)))
             .ToList();
 
     /// <summary>At most 2 short assumptions, without the final period (the summary adds one).</summary>
@@ -110,7 +107,13 @@ internal static class GoalExtraction
 
     /// <summary>A saved goal in the shape the summaries and proposals use.</summary>
     public static GoalDraft FromSaved(GoalDto goal) =>
-        new(goal.Name, goal.Description, goal.Indicator, goal.StartValue, goal.TargetValue, goal.Unit, goal.DueDate);
+        new(goal.Name, goal.Description, goal.Indicator, goal.StartValue, goal.TargetValue, goal.Unit, goal.DueDate,
+            goal.UserPlan);
+
+    /// <summary>A draft in the shape the AI reads and writes (dates as text).</summary>
+    public static ExtractedGoal ToExtracted(GoalDraft goal) =>
+        new(goal.Name, goal.Description, goal.Indicator, goal.StartValue, goal.TargetValue, goal.Unit,
+            goal.DueDate?.ToString("yyyy-MM-dd"), goal.UserPlan);
 
     /// <summary>"2026-12-25" → a date; anything else (or a mistake of the model) → null.</summary>
     public static DateOnly? ParseDate(string? text) =>
@@ -167,35 +170,6 @@ internal static class GoalExtraction
         return text.ToString();
     }
 
-    /// <summary>
-    /// The detailing question for the goal in focus: the whole goal as proposed, what was assumed, and the
-    /// three ways out (sim, pular, a correction), or the choices first when a doubt is open.
-    /// </summary>
-    public static string Proposal(GoalsDraft draft)
-    {
-        var goal = draft.Goals[0];
-        var text = new StringBuilder()
-            .Append("Vamos detalhar **").Append(goal.Name).Append("**:")
-            .Append("\n- **Indicador:** ").Append(goal.Indicator ?? "—")
-            .Append("\n- **Meta:** ").Append(Values(goal) ?? "—")
-            .Append("\n- **Prazo:** ").Append(goal.DueDate?.ToString("dd/MM/yyyy", PtBr) ?? "—");
-
-        if (goal.Description is not null)
-        {
-            text.Append("\n- **Contexto:** ").Append(goal.Description);
-        }
-
-        if (draft.Assumptions is { Count: > 0 } assumptions)
-        {
-            text.Append("\n\n💭 Supus: ").Append(string.Join("; ", assumptions)).Append('.');
-        }
-
-        text.Append(draft.Doubts.Count == 0
-            ? "\n\nEstá certo? Responda **sim** para salvar, **pular** para deixar como está, ou me diga o que ajustar."
-            : Choices(draft.Doubts));
-        return text.ToString();
-    }
-
     /// <summary>The open doubts as lettered options, and how to answer them.</summary>
     private static string Choices(IReadOnlyList<GoalDoubt> doubts)
     {
@@ -236,7 +210,7 @@ internal static class GoalExtraction
         return result;
     }
 
-    private static string? Values(GoalDraft goal)
+    public static string? Values(GoalDraft goal)
     {
         var unit = goal.Unit is null ? "" : " " + goal.Unit;
         return (goal.StartValue, goal.TargetValue) switch
@@ -248,7 +222,7 @@ internal static class GoalExtraction
         };
     }
 
-    private static string Number(decimal value) => value.ToString("0.##", PtBr);
+    public static string Number(decimal value) => value.ToString("0.##", PtBr);
 
     private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }

@@ -95,10 +95,11 @@ public class GoalTests
     {
         var goal = Goal.Create(Guid.CreateVersion7(), "Ler mais", null, null, null, DateTimeOffset.UtcNow);
 
-        var changed = goal.With(" Ler 2 livros ", null, "livros terminados", new DateOnly(2026, 12, 31), null, 2m, "livros");
+        var changed = goal.With(" Ler 2 livros ", null, "livros terminados", new DateOnly(2026, 12, 31), null, 2m, "livros", " vou ler à noite ");
 
         Assert.Equal((goal.Id, goal.UserId, goal.CreatedAt), (changed.Id, changed.UserId, changed.CreatedAt));
         Assert.Equal("Ler 2 livros", changed.Name);
-        Assert.Throws<ArgumentException>(() => goal.With(" ", null, null, null, null, null, null));
+        Assert.Equal("vou ler à noite", changed.UserPlan);
+        Assert.Throws<ArgumentException>(() => goal.With(" ", null, null, null, null, null, null, null));
     }
 }

@@ -93,7 +93,21 @@ public sealed class PippinRealAiTests(RealAiApiFactory factory, ITestOutputHelpe
         Assert.Contains(books.TargetValue, new decimal?[] { 2m, 3m });
         Assert.Equal(new DateOnly(2026, 12, 31), books.DueDate);
 
+        // Straight to deepening, one goal at a time: one question, then the plan for confirmation.
+        Assert.Equal("DetailGoals", (await StateAsync()).Stage);
+        Assert.Empty(await RoutinesAsync());
+
+        var firstPlan = await Send("hoje continuo com 94 kg, vou na academia 3 vezes por semana e leio 10 páginas toda noite");
+        Assert.Contains("Está certo?", firstPlan);
+        await Send("sim");
+
+        var secondPlan = await Send("pode propor um plano");
+        Assert.Contains("Está certo?", secondPlan);
+        var finalSummary = await Send("sim");
+
+        Assert.Contains("Esse é o resumo das metas.", finalSummary);
         Assert.Equal("CollectGoals", (await StateAsync()).Stage);
+        Assert.NotEmpty(await RoutinesAsync());
         Assert.StartsWith("Fechado!", await Send("por enquanto é só isso"));
     }
 
@@ -212,62 +226,98 @@ public sealed class PippinRealAiTests(RealAiApiFactory factory, ITestOutputHelpe
         Assert.Contains("5", reply);
     }
 
-    // ---------- ⑤ Detailing ----------
+    // ---------- ⑤ Deepening: one question, then the plan ----------
 
     [RealAiFact]
-    public async Task A_vague_goal_is_detailed_after_sim_and_the_second_sim_saves_the_proposal()
+    public async Task Saving_goes_straight_to_one_question_about_the_first_goal()
     {
         await SeedAsync("ConfirmGoals",
-            """{ "horizon": "2026-12-31", "goals": [{ "name": "Ler mais" }], "doubts": [] }""");
+            $$"""{ "horizon": "2026-12-31", "goals": [{{WeightGoal}}], "doubts": [] }""");
 
-        var proposal = await Send("sim");
+        var reply = await Send("sim");
 
-        // Saved as said, then a complete proposal is shown and waits for confirmation.
         var state = await StateAsync();
         Assert.Equal("DetailGoals", state.Stage);
-        Assert.Contains("Vamos detalhar", proposal);
-        var proposed = Assert.Single(state.Goals);
-        Assert.NotEqual(JsonValueKind.Null, proposed.GetProperty("indicator").ValueKind);
-        Assert.True(proposed.GetProperty("targetValue").GetDecimal() > 0);
-        Assert.NotEqual(JsonValueKind.Null, proposed.GetProperty("dueDate").ValueKind);
-        Assert.Null(Assert.Single(await GoalsAsync()).Indicator);
-
-        var summary = await Send("sim");
-
-        var goal = Assert.Single(await GoalsAsync());
-        Assert.NotNull(goal.Indicator);
-        Assert.NotNull(goal.TargetValue);
-        Assert.NotNull(goal.DueDate);
-        Assert.Contains("Pronto, terminamos de detalhar!", summary);
-        Assert.Equal("CollectGoals", (await StateAsync()).Stage);
+        Assert.Contains("propor um plano", reply); // the question offers a proposal
+        Assert.Contains("pesa", reply); // a weight goal asks for today's weight
     }
 
     [RealAiFact]
-    public async Task A_correction_while_detailing_changes_the_proposal_but_saves_nothing()
+    public async Task The_plan_becomes_routines_and_sim_saves_them_with_the_users_words()
     {
-        var id = await SeedGoalAsync("Ler mais", RealAiApiFactory.Now);
+        var id = await SeedGoalAsync("Ler 2 livros", RealAiApiFactory.Now);
+        await SeedAsync("DetailGoals", DetailingDraft(id));
+        const string plan = "vou ler segunda, quarta e sexta de manhã, umas 10 páginas";
+
+        var shown = await Send(plan);
+
+        Assert.Contains("segunda, quarta e sexta", shown);
+        Assert.Contains("de manhã", shown);
+        Assert.Equal("DetailGoals", (await StateAsync()).Stage);
+        Assert.Empty(await RoutinesAsync()); // nothing saved before the confirmation
+
+        await Send("sim");
+
+        var routine = Assert.Single(await RoutinesAsync());
+        Assert.Equal([1, 3, 5], routine.DaysOfWeek);
+        Assert.Equal((DayPeriod.Morning, 10m, RoutineSource.User), (routine.DayPeriod!.Value, routine.Amount!.Value, routine.Source));
+        Assert.Equal(plan, Assert.Single(await GoalsAsync()).UserPlan);
+    }
+
+    [RealAiFact]
+    public async Task Todays_weight_goes_to_the_start_value()
+    {
+        var id = await SeedGoalAsync("Emagrecer até 90 kg", RealAiApiFactory.Now);
+        await SeedAsync("DetailGoals", DetailingDraft(id, WeightGoal));
+
+        var shown = await Send("hoje peso 97 kg e vou na academia 3 vezes por semana");
+
+        var goal = Assert.Single((await StateAsync()).Goals);
+        Assert.Equal(97m, goal.GetProperty("startValue").GetDecimal());
+        Assert.Contains("97 kg", shown);
+        Assert.Contains("3x por semana", shown);
+    }
+
+    [RealAiFact]
+    public async Task Asking_for_a_proposal_shows_pippins_plan()
+    {
+        var id = await SeedGoalAsync("Ler 2 livros", RealAiApiFactory.Now);
         await SeedAsync("DetailGoals", DetailingDraft(id));
 
-        var reply = await Send("quero ler 5 livros");
+        var shown = await Send("não sei, pode propor um plano pra mim");
 
-        Assert.Equal(5m, Assert.Single((await StateAsync()).Goals).GetProperty("targetValue").GetDecimal());
-        Assert.Contains("5 livros", reply);
-        Assert.Null(Assert.Single(await GoalsAsync()).TargetValue);
-        Assert.Equal("DetailGoals", (await StateAsync()).Stage);
+        Assert.StartsWith("Minha proposta de plano para", shown);
+        var plan = (await StateAsync()).Draft.GetProperty("plan");
+        Assert.Equal("pippin", plan.GetProperty("source").GetString());
+        Assert.NotEqual(0, plan.GetProperty("routines").GetArrayLength());
+    }
+
+    [RealAiFact]
+    public async Task Ignoring_the_confirmation_saves_the_plan_and_handles_the_new_message()
+    {
+        var id = await SeedGoalAsync("Ler 2 livros", RealAiApiFactory.Now);
+        await SeedAsync("DetailGoals", DetailingDraft(id, withPlan: true));
+
+        var reply = await Send("quero adicionar outra meta: correr 5 km até o fim do ano");
+
+        Assert.StartsWith("Salvei o plano de **Ler 2 livros**! ✅", reply);
+        Assert.Single(await RoutinesAsync());
+        Assert.Equal("ConfirmGoals", (await StateAsync()).Stage);
+        Assert.Contains("5 km", reply);
     }
 
     [RealAiTheory]
-    [InlineData("pular")]
-    [InlineData("deixa assim por enquanto")]
-    public async Task Skipping_keeps_the_goal_as_it_was(string answer)
+    [InlineData("pula essa")]
+    [InlineData("depois eu vejo isso")]
+    public async Task Skipping_leaves_the_plan_for_later(string answer)
     {
-        var id = await SeedGoalAsync("Ler mais", RealAiApiFactory.Now);
+        var id = await SeedGoalAsync("Ler 2 livros", RealAiApiFactory.Now);
         await SeedAsync("DetailGoals", DetailingDraft(id));
 
         var reply = await Send(answer);
 
-        Assert.StartsWith("Tudo bem, deixei **Ler mais** como estava.", reply);
-        Assert.Null(Assert.Single(await GoalsAsync()).Indicator);
+        Assert.StartsWith("Tudo bem! Quando quiser, é só me contar o plano de **Ler 2 livros**.", reply);
+        Assert.Empty(await RoutinesAsync());
         Assert.Equal("CollectGoals", (await StateAsync()).Stage);
     }
 
@@ -301,17 +351,29 @@ public sealed class PippinRealAiTests(RealAiApiFactory factory, ITestOutputHelpe
         Assert.StartsWith("Claro!", reply);
     }
 
-    // Waiting for "sim" to a proposal for the saved goal "Ler mais".
-    private static string DetailingDraft(Guid goalId) =>
+    private const string ReadingGoal =
+        """{ "name": "Ler 2 livros", "indicator": "livros terminados", "targetValue": 2, "unit": "livros", "dueDate": "2026-12-31" }""";
+
+    private const string WeightGoal =
+        """{ "name": "Emagrecer até 90 kg", "indicator": "peso corporal", "targetValue": 90, "unit": "kg", "dueDate": "2026-12-25" }""";
+
+    // Deepening a saved goal: waiting for the answer to the one question or, with a plan, for "sim" to it.
+    private static string DetailingDraft(Guid goalId, string goal = ReadingGoal, bool withPlan = false) =>
         $$"""
         {
           "horizon": "2026-12-31",
-          "goals": [{ "name": "Ler 2 livros", "indicator": "livros terminados", "targetValue": 2, "unit": "livros",
-                      "dueDate": "2026-12-31" }],
+          "goals": [{{goal}}],
           "doubts": [],
           "detailQueue": ["{{goalId}}"],
-          "assumptions": ["meta: 2 livros", "prazo: o fim do período, 31/12/2026"]
+          "question": "Para conseguir **Ler 2 livros**, qual o seu plano? Me diga em poucas palavras, ou se quiser eu posso propor um plano para você.",
+          "plan": {{(withPlan ? MorningPlan : "null")}}
         }
+        """;
+
+    private const string MorningPlan =
+        """
+        { "source": "user", "routines": [{ "activity": "ler", "frequency": "weekly", "source": "user", "interval": 1,
+          "daysOfWeek": [1, 3, 5], "dayPeriod": "morning", "amount": 10, "unit": "páginas" }] }
         """;
 
     // What Pippin would have shown for the books part of the sentence: one goal and a choice A/B.
@@ -376,6 +438,9 @@ public sealed class PippinRealAiTests(RealAiApiFactory factory, ITestOutputHelpe
 
     private async Task<IReadOnlyList<GoalDto>> GoalsAsync() =>
         await factory.Services.GetRequiredService<IGoalService>().ListAsync(_userId);
+
+    private async Task<IReadOnlyList<RoutineDto>> RoutinesAsync() =>
+        await factory.Services.GetRequiredService<IGoalService>().ListRoutinesAsync(_userId);
 
     private sealed record State(string Stage, JsonElement Draft, IReadOnlyList<JsonElement> Goals, IReadOnlyList<JsonElement> Doubts);
 

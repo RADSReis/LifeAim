@@ -1,3 +1,4 @@
+using LifeAim.Modules.Goals.Contracts;
 using LifeAim.Modules.Goals.Domain;
 using Npgsql;
 
@@ -11,8 +12,9 @@ internal sealed class GoalRepository(NpgsqlDataSource dataSource)
         await using var command = dataSource.CreateCommand(
             """
             INSERT INTO goals.goals
-                (id, user_id, name, description, indicator, due_date, start_value, target_value, unit, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                (id, user_id, name, description, indicator, due_date, start_value, target_value, unit, user_plan,
+                 created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             """);
         command.Parameters.Add(new() { Value = goal.Id });
         command.Parameters.Add(new() { Value = goal.UserId });
@@ -23,6 +25,7 @@ internal sealed class GoalRepository(NpgsqlDataSource dataSource)
         command.Parameters.Add(new() { Value = goal.StartValue.HasValue ? goal.StartValue.Value : DBNull.Value });
         command.Parameters.Add(new() { Value = goal.TargetValue.HasValue ? goal.TargetValue.Value : DBNull.Value });
         command.Parameters.Add(new() { Value = (object?)goal.Unit ?? DBNull.Value });
+        command.Parameters.Add(new() { Value = (object?)goal.UserPlan ?? DBNull.Value });
         command.Parameters.Add(new() { Value = goal.CreatedAt });
 
         await command.ExecuteNonQueryAsync(cancellationToken);
@@ -35,7 +38,7 @@ internal sealed class GoalRepository(NpgsqlDataSource dataSource)
             """
             UPDATE goals.goals
             SET name = $3, description = $4, indicator = $5, due_date = $6,
-                start_value = $7, target_value = $8, unit = $9
+                start_value = $7, target_value = $8, unit = $9, user_plan = $10
             WHERE id = $1 AND user_id = $2
             """);
         command.Parameters.Add(new() { Value = goal.Id });
@@ -47,6 +50,7 @@ internal sealed class GoalRepository(NpgsqlDataSource dataSource)
         command.Parameters.Add(new() { Value = goal.StartValue.HasValue ? goal.StartValue.Value : DBNull.Value });
         command.Parameters.Add(new() { Value = goal.TargetValue.HasValue ? goal.TargetValue.Value : DBNull.Value });
         command.Parameters.Add(new() { Value = (object?)goal.Unit ?? DBNull.Value });
+        command.Parameters.Add(new() { Value = (object?)goal.UserPlan ?? DBNull.Value });
 
         return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
     }
@@ -58,7 +62,8 @@ internal sealed class GoalRepository(NpgsqlDataSource dataSource)
     {
         await using var command = dataSource.CreateCommand(
             """
-            SELECT id, user_id, name, description, indicator, due_date, start_value, target_value, unit, created_at
+            SELECT id, user_id, name, description, indicator, due_date, start_value, target_value, unit, user_plan,
+                   created_at
             FROM goals.goals
             WHERE user_id = $1
             ORDER BY created_at, id
@@ -79,9 +84,107 @@ internal sealed class GoalRepository(NpgsqlDataSource dataSource)
                 reader.IsDBNull(6) ? null : reader.GetDecimal(6),
                 reader.IsDBNull(7) ? null : reader.GetDecimal(7),
                 reader.IsDBNull(8) ? null : reader.GetString(8),
-                reader.GetFieldValue<DateTimeOffset>(9)));
+                reader.IsDBNull(9) ? null : reader.GetString(9),
+                reader.GetFieldValue<DateTimeOffset>(10)));
         }
 
         return goals;
     }
+
+    /// <summary>
+    /// Deletes the goal's routines and inserts the new ones in one transaction: the plan is replaced as a
+    /// whole, so a failure in the middle never leaves half of the old plan and half of the new one.
+    /// </summary>
+    public async Task ReplaceRoutinesAsync(
+        Guid goalId,
+        Guid userId,
+        IReadOnlyList<GoalRoutine> routines,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        await using (var delete = new NpgsqlCommand(
+            "DELETE FROM goals.goal_routines WHERE goal_id = $1 AND user_id = $2", connection, transaction))
+        {
+            delete.Parameters.Add(new() { Value = goalId });
+            delete.Parameters.Add(new() { Value = userId });
+            await delete.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        foreach (var routine in routines)
+        {
+            await using var insert = new NpgsqlCommand(
+                """
+                INSERT INTO goals.goal_routines
+                    (id, goal_id, user_id, activity, frequency, interval, days_of_week, times_per_period,
+                     time_of_day, day_period, amount, unit, duration_minutes, source, starts_on, ends_on, created_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+                """,
+                connection,
+                transaction);
+            insert.Parameters.Add(new() { Value = routine.Id });
+            insert.Parameters.Add(new() { Value = routine.GoalId });
+            insert.Parameters.Add(new() { Value = routine.UserId });
+            insert.Parameters.Add(new() { Value = routine.Activity });
+            insert.Parameters.Add(new() { Value = ToText(routine.Frequency) });
+            insert.Parameters.Add(new() { Value = routine.Interval });
+            insert.Parameters.Add(new() { Value = routine.DaysOfWeek.ToArray() });
+            insert.Parameters.Add(new() { Value = routine.TimesPerPeriod.HasValue ? routine.TimesPerPeriod.Value : DBNull.Value });
+            insert.Parameters.Add(new() { Value = routine.TimeOfDay.HasValue ? routine.TimeOfDay.Value : DBNull.Value });
+            insert.Parameters.Add(new() { Value = routine.DayPeriod is { } period ? ToText(period) : DBNull.Value });
+            insert.Parameters.Add(new() { Value = routine.Amount.HasValue ? routine.Amount.Value : DBNull.Value });
+            insert.Parameters.Add(new() { Value = (object?)routine.Unit ?? DBNull.Value });
+            insert.Parameters.Add(new() { Value = routine.DurationMinutes.HasValue ? routine.DurationMinutes.Value : DBNull.Value });
+            insert.Parameters.Add(new() { Value = ToText(routine.Source) });
+            insert.Parameters.Add(new() { Value = routine.StartsOn.HasValue ? routine.StartsOn.Value : DBNull.Value });
+            insert.Parameters.Add(new() { Value = routine.EndsOn.HasValue ? routine.EndsOn.Value : DBNull.Value });
+            insert.Parameters.Add(new() { Value = routine.CreatedAt });
+            await insert.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<GoalRoutine>> ListRoutinesByUserAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        await using var command = dataSource.CreateCommand(
+            """
+            SELECT id, goal_id, user_id, activity, frequency, interval, days_of_week, times_per_period, time_of_day,
+                   day_period, amount, unit, duration_minutes, source, starts_on, ends_on, created_at
+            FROM goals.goal_routines
+            WHERE user_id = $1
+            ORDER BY created_at, id
+            """);
+        command.Parameters.Add(new() { Value = userId });
+
+        var routines = new List<GoalRoutine>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            routines.Add(GoalRoutine.Load(
+                reader.GetGuid(0),
+                reader.GetGuid(1),
+                reader.GetGuid(2),
+                reader.GetString(3),
+                Enum.Parse<RoutineFrequency>(reader.GetString(4), ignoreCase: true),
+                reader.GetInt32(5),
+                reader.GetFieldValue<int[]>(6),
+                reader.IsDBNull(7) ? null : reader.GetInt32(7),
+                reader.IsDBNull(8) ? null : reader.GetFieldValue<TimeOnly>(8),
+                reader.IsDBNull(9) ? null : Enum.Parse<DayPeriod>(reader.GetString(9), ignoreCase: true),
+                reader.IsDBNull(10) ? null : reader.GetDecimal(10),
+                reader.IsDBNull(11) ? null : reader.GetString(11),
+                reader.IsDBNull(12) ? null : reader.GetInt32(12),
+                Enum.Parse<RoutineSource>(reader.GetString(13), ignoreCase: true),
+                reader.IsDBNull(14) ? null : reader.GetFieldValue<DateOnly>(14),
+                reader.IsDBNull(15) ? null : reader.GetFieldValue<DateOnly>(15),
+                reader.GetFieldValue<DateTimeOffset>(16)));
+        }
+
+        return routines;
+    }
+
+    // Enums are stored as lowercase text ("weekly"), so the table reads well and the CHECKs can list the values.
+    private static string ToText<TEnum>(TEnum value) where TEnum : struct, Enum => value.ToString().ToLowerInvariant();
 }

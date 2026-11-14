@@ -19,6 +19,7 @@ internal sealed class Goal
         decimal? startValue,
         decimal? targetValue,
         string? unit,
+        string? userPlan,
         DateTimeOffset createdAt)
     {
         Id = id;
@@ -30,6 +31,7 @@ internal sealed class Goal
         StartValue = startValue;
         TargetValue = targetValue;
         Unit = unit;
+        UserPlan = userPlan;
         CreatedAt = createdAt;
     }
 
@@ -52,6 +54,9 @@ internal sealed class Goal
     /// <summary>The unit of both values (kg).</summary>
     public string? Unit { get; }
 
+    /// <summary>How the user intends to reach the goal, exactly as written ("vou ler seg, qua e sex de manhã").</summary>
+    public string? UserPlan { get; }
+
     public DateTimeOffset CreatedAt { get; }
 
     public static Goal Create(
@@ -63,7 +68,8 @@ internal sealed class Goal
         DateTimeOffset now,
         decimal? startValue = null,
         decimal? targetValue = null,
-        string? unit = null)
+        string? unit = null,
+        string? userPlan = null)
     {
         if (userId == Guid.Empty)
         {
@@ -81,12 +87,13 @@ internal sealed class Goal
             startValue,
             targetValue,
             ValidUnit(unit),
+            Blank(userPlan),
             ToDatabasePrecision(now));
     }
 
     // PostgreSQL's timestamptz keeps microseconds; .NET keeps 100 ns ticks. Dropping the extra digit here makes
     // the goal returned by CreateAsync equal to the one read back later.
-    private static DateTimeOffset ToDatabasePrecision(DateTimeOffset moment)
+    internal static DateTimeOffset ToDatabasePrecision(DateTimeOffset moment)
     {
         var utc = moment.ToUniversalTime();
         return utc.AddTicks(-(utc.Ticks % 10));
@@ -103,9 +110,10 @@ internal sealed class Goal
         DateOnly? dueDate,
         decimal? startValue,
         decimal? targetValue,
-        string? unit) =>
+        string? unit,
+        string? userPlan) =>
         new(Id, UserId, ValidName(name), Blank(description), Blank(indicator), dueDate, startValue, targetValue,
-            ValidUnit(unit), CreatedAt);
+            ValidUnit(unit), Blank(userPlan), CreatedAt);
 
     private static string ValidName(string? name)
     {
@@ -145,8 +153,9 @@ internal sealed class Goal
         decimal? startValue,
         decimal? targetValue,
         string? unit,
+        string? userPlan,
         DateTimeOffset createdAt) =>
-        new(id, userId, name, description, indicator, dueDate, startValue, targetValue, unit, createdAt);
+        new(id, userId, name, description, indicator, dueDate, startValue, targetValue, unit, userPlan, createdAt);
 
-    private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    internal static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }
