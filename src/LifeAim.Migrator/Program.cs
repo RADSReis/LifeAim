@@ -3,6 +3,7 @@
 
 using DbUp;
 using LifeAim.BuildingBlocks;
+using LifeAim.Modules.Agents;
 using LifeAim.Modules.Communication;
 using LifeAim.Modules.Goals;
 using Microsoft.Extensions.Configuration;
@@ -13,6 +14,7 @@ ModuleMigrations[] modules =
 [
     GoalsModule.Migrations,
     CommunicationModule.Migrations,
+    AgentsModule.Migrations,
 ];
 
 // Locally: User Secrets (shared with the API). On the VPS: ConnectionStrings__LifeAim.

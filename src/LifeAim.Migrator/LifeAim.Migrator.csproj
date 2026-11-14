@@ -16,6 +16,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Modules\LifeAim.Modules.Agents\LifeAim.Modules.Agents.csproj" />
     <ProjectReference Include="..\Modules\LifeAim.Modules.Communication\LifeAim.Modules.Communication.csproj" />
     <ProjectReference Include="..\Modules\LifeAim.Modules.Goals\LifeAim.Modules.Goals.csproj" />
   </ItemGroup>

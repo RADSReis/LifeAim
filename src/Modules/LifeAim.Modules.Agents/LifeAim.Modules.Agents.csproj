@@ -7,7 +7,19 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.AI" Version="10.11.0" />
+    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.11.0" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.15" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.15" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Compiled into the DLL, so the scripts always ship with the code that expects them. -->
+    <EmbeddedResource Include="Infrastructure\Migrations\*.sql" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="LifeAim.Modules.Agents.Tests" />
   </ItemGroup>
 
   <ItemGroup>

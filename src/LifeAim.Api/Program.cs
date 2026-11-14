@@ -17,7 +17,7 @@ builder.Services
     .AddGoalsModule()
     .AddPlanningModule()
     .AddProgressModule()
-    .AddAgentsModule()
+    .AddAgentsModule(builder.Configuration)
     .AddCommunicationModule(builder.Configuration)
     .AddReportingModule();
 
