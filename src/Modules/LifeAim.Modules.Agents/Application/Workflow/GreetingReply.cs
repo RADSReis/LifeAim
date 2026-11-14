@@ -17,8 +17,8 @@ internal sealed class GreetingReply
     {
         var text = new StringBuilder(context.UserName is null ? "Oi! 😊" : $"Opa! Olá, {context.UserName}! 😊");
 
-        // Goals waiting for confirmation come first: the greeting resumes them instead of listing the saved ones.
-        var listsGoals = context.Stage != Stage.ConfirmGoals && context.SavedGoals.Count > 0;
+        // Only between tasks: a confirmation or a detailing in progress comes first, so the greeting resumes it.
+        var listsGoals = context.Stage == Stage.CollectGoals && context.SavedGoals.Count > 0;
         if (listsGoals)
         {
             text.Append("\n\n**Suas metas:**");

@@ -70,6 +70,45 @@ internal sealed class Goal
             throw new ArgumentException("A goal needs its user.", nameof(userId));
         }
 
+        // Version 7 GUIDs start with a timestamp, so new rows land at the end of the primary key index.
+        return new Goal(
+            Guid.CreateVersion7(now),
+            userId,
+            ValidName(name),
+            Blank(description),
+            Blank(indicator),
+            dueDate,
+            startValue,
+            targetValue,
+            ValidUnit(unit),
+            ToDatabasePrecision(now));
+    }
+
+    // PostgreSQL's timestamptz keeps microseconds; .NET keeps 100 ns ticks. Dropping the extra digit here makes
+    // the goal returned by CreateAsync equal to the one read back later.
+    private static DateTimeOffset ToDatabasePrecision(DateTimeOffset moment)
+    {
+        var utc = moment.ToUniversalTime();
+        return utc.AddTicks(-(utc.Ticks % 10));
+    }
+
+    /// <summary>
+    /// The same goal with new values (id, user and creation time stay): the same rules as a new goal.
+    /// A new object instead of setters, so a goal is never half changed.
+    /// </summary>
+    public Goal With(
+        string name,
+        string? description,
+        string? indicator,
+        DateOnly? dueDate,
+        decimal? startValue,
+        decimal? targetValue,
+        string? unit) =>
+        new(Id, UserId, ValidName(name), Blank(description), Blank(indicator), dueDate, startValue, targetValue,
+            ValidUnit(unit), CreatedAt);
+
+    private static string ValidName(string? name)
+    {
         var trimmedName = name?.Trim();
         if (string.IsNullOrEmpty(trimmedName))
         {
@@ -81,24 +120,18 @@ internal sealed class Goal
             throw new ArgumentException($"A goal name has at most {MaxNameLength} characters.", nameof(name));
         }
 
+        return trimmedName;
+    }
+
+    private static string? ValidUnit(string? unit)
+    {
         var trimmedUnit = Blank(unit);
         if (trimmedUnit?.Length > MaxUnitLength)
         {
             throw new ArgumentException($"A unit has at most {MaxUnitLength} characters.", nameof(unit));
         }
 
-        // Version 7 GUIDs start with a timestamp, so new rows land at the end of the primary key index.
-        return new Goal(
-            Guid.CreateVersion7(now),
-            userId,
-            trimmedName,
-            Blank(description),
-            Blank(indicator),
-            dueDate,
-            startValue,
-            targetValue,
-            trimmedUnit,
-            now.ToUniversalTime());
+        return trimmedUnit;
     }
 
     /// <summary>Rebuilds a goal read from the database (already validated when it was created).</summary>

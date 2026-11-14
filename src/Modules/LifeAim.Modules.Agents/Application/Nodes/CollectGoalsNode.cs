@@ -99,6 +99,7 @@ internal sealed class CollectGoalsNode(IChatClient chatClient, TimeProvider time
             - finished: true se o usuário diz que não quer cadastrar mais metas ("não", "é só isso", "por enquanto é isso").
 
             {GoalExtraction.GoalFieldRules}
+            {GoalExtraction.NoInventionRule}
 
             {GoalExtraction.DoubtRules}
             """;

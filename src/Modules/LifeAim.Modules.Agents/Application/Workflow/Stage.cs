@@ -17,4 +17,10 @@ internal enum Stage
 
     /// <summary>Pippin showed the goals it understood and waits for "sim", a correction, or something else.</summary>
     ConfirmGoals,
+
+    /// <summary>
+    /// Saved goals that miss what makes them plannable (indicator, target, due date), one at a time: Pippin
+    /// proposes the missing parts and waits for "sim", a correction or "pular".
+    /// </summary>
+    DetailGoals,
 }

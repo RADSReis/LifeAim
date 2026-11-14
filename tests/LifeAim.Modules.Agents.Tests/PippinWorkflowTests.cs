@@ -426,19 +426,190 @@ public class PippinWorkflowTests
         }
         """;
 
+    // ---------- ⑤ Detailing the saved goals that are not plannable yet ----------
+
+    // The AI's proposal for "Ler mais" (only a name saved): it fills indicator, target and due date.
+    private const string ProposalForReading =
+        """
+        {
+          "goal": { "name": "Ler 2 livros", "description": null, "indicator": "livros terminados",
+                    "startValue": null, "targetValue": 2, "unit": "livros", "dueDate": "2026-12-31" },
+          "assumptions": ["meta: 2 livros", "prazo: o fim do período, 31/12/2026"],
+          "doubts": []
+        }
+        """;
+
+    [Fact]
+    public async Task Confirming_a_goal_that_is_not_plannable_saves_it_and_starts_detailing_it()
+    {
+        AtStage(Stage.ConfirmGoals, new GoalsDraft(
+            new DateOnly(2026, 12, 31), [new GoalDraft("Ler mais", null, null, null, null, null, null)], []));
+        var goals = new FakeGoalService();
+        var ai = new FakeChatClient(
+            """{ "decision": "confirm", "goals": [{ "name": "Ler mais" }], "doubts": [] }""", ProposalForReading);
+        var workflow = CreateWorkflow(ai, goals);
+
+        var reply = await workflow.ReplyAsync(Message("sim"));
+
+        Assert.StartsWith("Salvei! ✅", reply);
+        Assert.Contains("Agora vamos deixar cada meta pronta para planejar, uma de cada vez.", reply);
+        Assert.Contains(
+            "Vamos detalhar **Ler 2 livros**:\n- **Indicador:** livros terminados\n- **Meta:** 2 livros\n- **Prazo:** 31/12/2026", reply);
+        Assert.Contains("💭 Supus: meta: 2 livros; prazo: o fim do período, 31/12/2026.", reply);
+        Assert.EndsWith("Responda **sim** para salvar, **pular** para deixar como está, ou me diga o que ajustar.", reply);
+
+        var state = _store.States[UserId];
+        Assert.Equal(Stage.DetailGoals, state.Stage);
+        Assert.Equal([Assert.Single(goals.Saved).Id], state.Draft!.DetailQueue);
+        Assert.Empty(goals.Updated); // the proposal waits for the user's "sim"
+        Assert.Equal(2, ai.Calls.Count); // one call to classify the confirmation, one to propose
+    }
+
+    [Fact]
+    public async Task Sim_to_the_proposal_updates_the_goal_and_with_none_left_shows_the_summary()
+    {
+        var goals = new FakeGoalService();
+        var reading = goals.Add(UserId, "Ler mais", November.GetUtcNow());
+        AtDetailing(goals, reading);
+        var workflow = CreateWorkflow(new FakeChatClient(DetailAnswer("confirm", target: 2)), goals);
+
+        var reply = await workflow.ReplyAsync(Message("sim"));
+
+        var update = Assert.Single(goals.Updated);
+        Assert.Equal(
+            new UpdateGoalRequest(reading.Id, UserId, "Ler 2 livros", null, "livros terminados", new DateOnly(2026, 12, 31), null, 2m, "livros"),
+            update);
+        Assert.StartsWith("Salvei **Ler 2 livros**! ✅\n\nPronto, terminamos de detalhar! 🎉\n\n**Resumo das suas metas:**", reply);
+        Assert.Contains("1. **Ler 2 livros** — livros terminados: 2 livros · até 31/12/2026", reply);
+        Assert.EndsWith("Quer adicionar mais alguma meta até 31/12/2026?", reply);
+        Assert.Equal(Stage.CollectGoals, _store.States[UserId].Stage);
+        Assert.Null(_store.States[UserId].Draft!.DetailQueue);
+    }
+
+    [Fact]
+    public async Task Sim_to_the_proposal_goes_on_to_the_next_goal_in_the_queue()
+    {
+        var goals = new FakeGoalService();
+        var reading = goals.Add(UserId, "Ler mais", November.GetUtcNow());
+        var running = goals.Add(UserId, "Correr", November.GetUtcNow());
+        AtDetailing(goals, reading, running);
+        var ai = new FakeChatClient(
+            DetailAnswer("confirm", target: 2),
+            """
+            { "goal": { "name": "Correr 5 km", "indicator": "distância numa corrida", "targetValue": 5, "unit": "km",
+                        "dueDate": "2026-12-31" },
+              "assumptions": ["meta: 5 km"], "doubts": [] }
+            """);
+        var workflow = CreateWorkflow(ai, goals);
+
+        var reply = await workflow.ReplyAsync(Message("sim"));
+
+        Assert.StartsWith("Salvei **Ler 2 livros**! ✅\n\nVamos detalhar **Correr 5 km**:", reply);
+        Assert.Equal(Stage.DetailGoals, _store.States[UserId].Stage);
+        Assert.Equal([running.Id], _store.States[UserId].Draft!.DetailQueue);
+    }
+
+    [Fact]
+    public async Task Pular_keeps_the_goal_as_it_was_and_moves_on()
+    {
+        var goals = new FakeGoalService();
+        var reading = goals.Add(UserId, "Ler mais", November.GetUtcNow());
+        AtDetailing(goals, reading);
+        var workflow = CreateWorkflow(new FakeChatClient(DetailAnswer("skip", target: 2)), goals);
+
+        var reply = await workflow.ReplyAsync(Message("pular"));
+
+        Assert.StartsWith("Tudo bem, deixei **Ler mais** como estava.\n\nPronto, terminamos de detalhar!", reply);
+        Assert.Contains("1. **Ler mais**", reply); // the summary shows the goal unchanged
+        Assert.Empty(goals.Updated);
+        Assert.Equal(Stage.CollectGoals, _store.States[UserId].Stage);
+    }
+
+    [Fact]
+    public async Task A_correction_shows_the_proposal_again_without_saving()
+    {
+        var goals = new FakeGoalService();
+        var reading = goals.Add(UserId, "Ler mais", November.GetUtcNow());
+        AtDetailing(goals, reading);
+        var workflow = CreateWorkflow(new FakeChatClient(DetailAnswer("change", target: 5)), goals);
+
+        var reply = await workflow.ReplyAsync(Message("quero ler 5"));
+
+        Assert.StartsWith("Vamos detalhar **Ler 5 livros**:", reply);
+        Assert.Contains("- **Meta:** 5 livros", reply);
+        Assert.DoesNotContain("💭", reply); // nothing is an assumption anymore
+        Assert.Empty(goals.Updated);
+        Assert.Equal(Stage.DetailGoals, _store.States[UserId].Stage);
+        Assert.Equal(5m, _store.States[UserId].Draft!.Goals[0].TargetValue);
+    }
+
+    [Fact]
+    public async Task Sim_while_a_doubt_is_open_saves_nothing_and_asks_for_the_choice()
+    {
+        var goals = new FakeGoalService();
+        var reading = goals.Add(UserId, "Ler mais", November.GetUtcNow());
+        AtDetailing(goals, reading, doubt: true);
+        var workflow = CreateWorkflow(new FakeChatClient(DetailAnswer("confirm", target: 2, keepDoubt: true)), goals);
+
+        var reply = await workflow.ReplyAsync(Message("sim"));
+
+        Assert.StartsWith("Preciso que você escolha uma das opções antes de salvar.\n\nVamos detalhar", reply);
+        Assert.Contains("**A)** 2 livros", reply);
+        Assert.Empty(goals.Updated);
+    }
+
+    [Fact]
+    public async Task A_greeting_while_detailing_resumes_the_proposal()
+    {
+        var goals = new FakeGoalService();
+        var reading = goals.Add(UserId, "Ler mais", November.GetUtcNow());
+        AtDetailing(goals, reading);
+        var workflow = CreateWorkflow(new FakeChatClient(DetailAnswer("greeting", target: 2)), goals);
+
+        var reply = await workflow.ReplyAsync(Message("oi"));
+
+        Assert.StartsWith("Opa! Olá, Rafael! 😊 Voltando de onde paramos:\n\nVamos detalhar **Ler 2 livros**:", reply);
+        Assert.DoesNotContain("Suas metas", reply);
+        Assert.Empty(goals.Updated);
+    }
+
+    // The conversation waiting for "sim" to the proposal of the first goal in the queue.
+    private void AtDetailing(FakeGoalService goals, GoalDto first, GoalDto? second = null, bool doubt = false) =>
+        AtStage(Stage.DetailGoals, new GoalsDraft(
+            new DateOnly(2026, 12, 31),
+            [new GoalDraft("Ler 2 livros", null, "livros terminados", null, 2m, "livros", new DateOnly(2026, 12, 31))],
+            doubt ? [new GoalDoubt("Quantos livros?", ["2 livros", "3 livros"])] : [],
+            second is null ? [first.Id] : [first.Id, second.Id],
+            ["meta: 2 livros"]));
+
+    private static string DetailAnswer(string decision, int target, bool keepDoubt = false) =>
+        $$"""
+        {
+          "decision": "{{decision}}",
+          "goal": { "name": "Ler {{target}} livros", "description": null, "indicator": "livros terminados",
+                    "startValue": null, "targetValue": {{target}}, "unit": "livros", "dueDate": "2026-12-31" },
+          "assumptions": [],
+          "doubts": {{(keepDoubt ? KeptDetailDoubt : "[]")}}
+        }
+        """;
+
+    private const string KeptDetailDoubt = """[{ "question": "Quantos livros?", "options": ["2 livros", "3 livros"] }]""";
+
     private void AtStage(Stage stage, GoalsDraft? draft = null) =>
         _store.States[UserId] = new ConversationState(stage, "Rafael", draft);
 
     private PippinWorkflow CreateWorkflow(IChatClient ai, FakeGoalService? goals = null)
     {
         goals ??= new FakeGoalService();
+        var detailing = new GoalDetailing(ai, goals, November);
         return new(
             _store,
             [
                 new GreetingNode(),
                 new AskNameNode(ai, November),
                 new CollectGoalsNode(ai, November),
-                new ConfirmGoalsNode(ai, goals, November),
+                new ConfirmGoalsNode(ai, goals, detailing, November),
+                new DetailGoalsNode(ai, goals, detailing, November),
             ],
             new FallbackRouter(),
             new GreetingReply(),

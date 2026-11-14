@@ -79,4 +79,26 @@ public class GoalTests
     {
         Assert.Throws<ArgumentException>(() => Goal.Create(Guid.Empty, "Aprender inglês", null, null, null, Now));
     }
+
+    [Fact]
+    public void The_creation_time_has_the_databases_precision_microseconds()
+    {
+        var now = new DateTimeOffset(2026, 11, 14, 15, 2, 48, TimeSpan.Zero).AddTicks(5481404);
+
+        var goal = Goal.Create(Guid.CreateVersion7(), "Ler mais", null, null, null, now);
+
+        Assert.Equal(now.AddTicks(-4), goal.CreatedAt);
+    }
+
+    [Fact]
+    public void Changing_a_goal_keeps_its_identity_and_follows_the_same_rules()
+    {
+        var goal = Goal.Create(Guid.CreateVersion7(), "Ler mais", null, null, null, DateTimeOffset.UtcNow);
+
+        var changed = goal.With(" Ler 2 livros ", null, "livros terminados", new DateOnly(2026, 12, 31), null, 2m, "livros");
+
+        Assert.Equal((goal.Id, goal.UserId, goal.CreatedAt), (changed.Id, changed.UserId, changed.CreatedAt));
+        Assert.Equal("Ler 2 livros", changed.Name);
+        Assert.Throws<ArgumentException>(() => goal.With(" ", null, null, null, null, null, null));
+    }
 }

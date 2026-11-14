@@ -212,6 +212,78 @@ public sealed class PippinRealAiTests(RealAiApiFactory factory, ITestOutputHelpe
         Assert.Contains("5", reply);
     }
 
+    // ---------- ⑤ Detailing ----------
+
+    [RealAiFact]
+    public async Task A_vague_goal_is_detailed_after_sim_and_the_second_sim_saves_the_proposal()
+    {
+        await SeedAsync("ConfirmGoals",
+            """{ "horizon": "2026-12-31", "goals": [{ "name": "Ler mais" }], "doubts": [] }""");
+
+        var proposal = await Send("sim");
+
+        // Saved as said, then a complete proposal is shown and waits for confirmation.
+        var state = await StateAsync();
+        Assert.Equal("DetailGoals", state.Stage);
+        Assert.Contains("Vamos detalhar", proposal);
+        var proposed = Assert.Single(state.Goals);
+        Assert.NotEqual(JsonValueKind.Null, proposed.GetProperty("indicator").ValueKind);
+        Assert.True(proposed.GetProperty("targetValue").GetDecimal() > 0);
+        Assert.NotEqual(JsonValueKind.Null, proposed.GetProperty("dueDate").ValueKind);
+        Assert.Null(Assert.Single(await GoalsAsync()).Indicator);
+
+        var summary = await Send("sim");
+
+        var goal = Assert.Single(await GoalsAsync());
+        Assert.NotNull(goal.Indicator);
+        Assert.NotNull(goal.TargetValue);
+        Assert.NotNull(goal.DueDate);
+        Assert.Contains("Pronto, terminamos de detalhar!", summary);
+        Assert.Equal("CollectGoals", (await StateAsync()).Stage);
+    }
+
+    [RealAiFact]
+    public async Task A_correction_while_detailing_changes_the_proposal_but_saves_nothing()
+    {
+        var id = await SeedGoalAsync("Ler mais", RealAiApiFactory.Now);
+        await SeedAsync("DetailGoals", DetailingDraft(id));
+
+        var reply = await Send("quero ler 5 livros");
+
+        Assert.Equal(5m, Assert.Single((await StateAsync()).Goals).GetProperty("targetValue").GetDecimal());
+        Assert.Contains("5 livros", reply);
+        Assert.Null(Assert.Single(await GoalsAsync()).TargetValue);
+        Assert.Equal("DetailGoals", (await StateAsync()).Stage);
+    }
+
+    [RealAiTheory]
+    [InlineData("pular")]
+    [InlineData("deixa assim por enquanto")]
+    public async Task Skipping_keeps_the_goal_as_it_was(string answer)
+    {
+        var id = await SeedGoalAsync("Ler mais", RealAiApiFactory.Now);
+        await SeedAsync("DetailGoals", DetailingDraft(id));
+
+        var reply = await Send(answer);
+
+        Assert.StartsWith("Tudo bem, deixei **Ler mais** como estava.", reply);
+        Assert.Null(Assert.Single(await GoalsAsync()).Indicator);
+        Assert.Equal("CollectGoals", (await StateAsync()).Stage);
+    }
+
+    // Waiting for "sim" to a proposal for the saved goal "Ler mais".
+    private static string DetailingDraft(Guid goalId) =>
+        $$"""
+        {
+          "horizon": "2026-12-31",
+          "goals": [{ "name": "Ler 2 livros", "indicator": "livros terminados", "targetValue": 2, "unit": "livros",
+                      "dueDate": "2026-12-31" }],
+          "doubts": [],
+          "detailQueue": ["{{goalId}}"],
+          "assumptions": ["meta: 2 livros", "prazo: o fim do período, 31/12/2026"]
+        }
+        """;
+
     // What Pippin would have shown for the books part of the sentence: one goal and a choice A/B.
     private const string BooksDraftWithDoubt =
         """
@@ -305,15 +377,17 @@ public sealed class PippinRealAiTests(RealAiApiFactory factory, ITestOutputHelpe
     }
 
     // A goal saved at a chosen moment (IGoalService would stamp it with the test clock's "now").
-    private async Task SeedGoalAsync(string name, DateTimeOffset createdAt)
+    private async Task<Guid> SeedGoalAsync(string name, DateTimeOffset createdAt)
     {
+        var id = Guid.CreateVersion7();
         await using var command = Db.CreateCommand(
             "INSERT INTO goals.goals (id, user_id, name, created_at) VALUES ($1, $2, $3, $4)");
-        command.Parameters.Add(new() { Value = Guid.CreateVersion7() });
+        command.Parameters.Add(new() { Value = id });
         command.Parameters.Add(new() { Value = _userId });
         command.Parameters.Add(new() { Value = name });
         command.Parameters.Add(new() { Value = createdAt });
         await command.ExecuteNonQueryAsync();
+        return id;
     }
 
     public Task InitializeAsync()

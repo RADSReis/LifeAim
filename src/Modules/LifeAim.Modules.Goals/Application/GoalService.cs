@@ -29,6 +29,21 @@ internal sealed class GoalService(GoalRepository repository, TimeProvider timePr
         return goals.Select(ToDto).ToList();
     }
 
+    public async Task<GoalDto?> UpdateAsync(UpdateGoalRequest request, CancellationToken cancellationToken = default)
+    {
+        var goal = await repository.FindAsync(request.GoalId, request.UserId, cancellationToken);
+        if (goal is null)
+        {
+            return null;
+        }
+
+        var changed = goal.With(
+            request.Name, request.Description, request.Indicator, request.DueDate,
+            request.StartValue, request.TargetValue, request.Unit);
+
+        return await repository.UpdateAsync(changed, cancellationToken) ? ToDto(changed) : null;
+    }
+
     private static GoalDto ToDto(Goal goal) =>
         new(
             goal.Id, goal.UserId, goal.Name, goal.Description, goal.Indicator, goal.DueDate,

@@ -40,6 +40,8 @@ public static class AgentsModule
         services.AddSingleton<INode, AskNameNode>();
         services.AddSingleton<INode, CollectGoalsNode>();
         services.AddSingleton<INode, ConfirmGoalsNode>();
+        services.AddSingleton<INode, DetailGoalsNode>();
+        services.AddSingleton<GoalDetailing>();
         services.AddSingleton<FallbackRouter>();
         services.AddSingleton<GreetingReply>();
         services.AddSingleton<IPippin, PippinWorkflow>();

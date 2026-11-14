@@ -51,6 +51,32 @@ public sealed class GoalServiceTests(LifeAimApiFactory factory) : IClassFixture<
         Assert.Empty(someoneElses);
     }
 
+    [Fact]
+    public async Task Updates_the_editable_fields_and_keeps_id_user_and_creation_time()
+    {
+        var created = await Goals.CreateAsync(new CreateGoalRequest(_userId, "Ler mais"));
+
+        var updated = await Goals.UpdateAsync(new UpdateGoalRequest(
+            created.Id, _userId, "Ler 2 livros", null, "livros terminados", new DateOnly(2026, 12, 31), null, 2m, "livros"));
+
+        var goal = Assert.Single(await Goals.ListAsync(_userId));
+        Assert.Equal(updated, goal);
+        Assert.Equal((created.Id, created.CreatedAt), (goal.Id, goal.CreatedAt));
+        Assert.Equal(("Ler 2 livros", "livros terminados", 2m), (goal.Name, goal.Indicator!, goal.TargetValue!.Value));
+    }
+
+    [Fact]
+    public async Task Does_not_update_someone_elses_goal()
+    {
+        var created = await Goals.CreateAsync(new CreateGoalRequest(_userId, "Ler mais"));
+
+        var updated = await Goals.UpdateAsync(new UpdateGoalRequest(
+            created.Id, Guid.CreateVersion7(), "Roubada", null, null, null, null, null, null));
+
+        Assert.Null(updated);
+        Assert.Equal("Ler mais", Assert.Single(await Goals.ListAsync(_userId)).Name);
+    }
+
     public Task InitializeAsync() => Task.CompletedTask;
 
     public async Task DisposeAsync()

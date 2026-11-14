@@ -96,7 +96,31 @@ internal sealed class FakeGoalService : IGoalService
     public Task<IReadOnlyList<GoalDto>> ListAsync(Guid userId, CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<GoalDto>>(Saved.Where(g => g.UserId == userId).ToList());
 
-    /// <summary>A goal saved earlier, at <paramref name="createdAt"/>.</summary>
-    public void Add(Guid userId, string name, DateTimeOffset createdAt) =>
-        Saved.Add(new GoalDto(Guid.CreateVersion7(), userId, name, null, null, null, null, null, null, createdAt));
+    public List<UpdateGoalRequest> Updated { get; } = [];
+
+    public Task<GoalDto?> UpdateAsync(UpdateGoalRequest request, CancellationToken cancellationToken = default)
+    {
+        Updated.Add(request);
+        var index = Saved.FindIndex(g => g.Id == request.GoalId && g.UserId == request.UserId);
+        if (index < 0)
+        {
+            return Task.FromResult<GoalDto?>(null);
+        }
+
+        Saved[index] = Saved[index] with
+        {
+            Name = request.Name, Description = request.Description, Indicator = request.Indicator,
+            DueDate = request.DueDate, StartValue = request.StartValue, TargetValue = request.TargetValue,
+            Unit = request.Unit,
+        };
+        return Task.FromResult<GoalDto?>(Saved[index]);
+    }
+
+    /// <summary>A goal saved earlier, at <paramref name="createdAt"/> (only the name: not plannable yet).</summary>
+    public GoalDto Add(Guid userId, string name, DateTimeOffset createdAt)
+    {
+        var goal = new GoalDto(Guid.CreateVersion7(), userId, name, null, null, null, null, null, null, createdAt);
+        Saved.Add(goal);
+        return goal;
+    }
 }

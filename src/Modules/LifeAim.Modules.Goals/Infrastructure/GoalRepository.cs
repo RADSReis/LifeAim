@@ -28,6 +28,32 @@ internal sealed class GoalRepository(NpgsqlDataSource dataSource)
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    /// <summary>Writes the editable fields; false when no goal with that id belongs to that user.</summary>
+    public async Task<bool> UpdateAsync(Goal goal, CancellationToken cancellationToken)
+    {
+        await using var command = dataSource.CreateCommand(
+            """
+            UPDATE goals.goals
+            SET name = $3, description = $4, indicator = $5, due_date = $6,
+                start_value = $7, target_value = $8, unit = $9
+            WHERE id = $1 AND user_id = $2
+            """);
+        command.Parameters.Add(new() { Value = goal.Id });
+        command.Parameters.Add(new() { Value = goal.UserId });
+        command.Parameters.Add(new() { Value = goal.Name });
+        command.Parameters.Add(new() { Value = (object?)goal.Description ?? DBNull.Value });
+        command.Parameters.Add(new() { Value = (object?)goal.Indicator ?? DBNull.Value });
+        command.Parameters.Add(new() { Value = goal.DueDate.HasValue ? goal.DueDate.Value : DBNull.Value });
+        command.Parameters.Add(new() { Value = goal.StartValue.HasValue ? goal.StartValue.Value : DBNull.Value });
+        command.Parameters.Add(new() { Value = goal.TargetValue.HasValue ? goal.TargetValue.Value : DBNull.Value });
+        command.Parameters.Add(new() { Value = (object?)goal.Unit ?? DBNull.Value });
+
+        return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
+    }
+
+    public async Task<Goal?> FindAsync(Guid id, Guid userId, CancellationToken cancellationToken) =>
+        (await ListByUserAsync(userId, cancellationToken)).FirstOrDefault(goal => goal.Id == id);
+
     public async Task<IReadOnlyList<Goal>> ListByUserAsync(Guid userId, CancellationToken cancellationToken)
     {
         await using var command = dataSource.CreateCommand(

@@ -10,6 +10,12 @@ public interface IGoalService
 
     /// <summary>The user's goals, oldest first.</summary>
     Task<IReadOnlyList<GoalDto>> ListAsync(Guid userId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Replaces the editable fields of one of the user's goals (everything but id, user and creation time).
+    /// Null when the goal does not exist or belongs to someone else.
+    /// </summary>
+    Task<GoalDto?> UpdateAsync(UpdateGoalRequest request, CancellationToken cancellationToken = default);
 }
 
 /// <param name="Indicator">What is measured, in words ("peso corporal").</param>
@@ -25,6 +31,18 @@ public sealed record CreateGoalRequest(
     decimal? StartValue = null,
     decimal? TargetValue = null,
     string? Unit = null);
+
+/// <summary>The new values of every editable field; a null clears that field.</summary>
+public sealed record UpdateGoalRequest(
+    Guid GoalId,
+    Guid UserId,
+    string Name,
+    string? Description,
+    string? Indicator,
+    DateOnly? DueDate,
+    decimal? StartValue,
+    decimal? TargetValue,
+    string? Unit);
 
 public sealed record GoalDto(
     Guid Id,

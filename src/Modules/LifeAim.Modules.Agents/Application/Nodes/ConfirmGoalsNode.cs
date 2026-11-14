@@ -12,7 +12,11 @@ namespace LifeAim.Modules.Agents.Application.Nodes;
 /// edge: confirm → save through the Goals module; change → show the list again; anything else → router.
 /// Nothing is saved before the user agrees: the AI may have misunderstood.
 /// </summary>
-internal sealed class ConfirmGoalsNode(IChatClient chatClient, IGoalService goals, TimeProvider timeProvider) : INode
+internal sealed class ConfirmGoalsNode(
+    IChatClient chatClient,
+    IGoalService goals,
+    GoalDetailing detailing,
+    TimeProvider timeProvider) : INode
 {
     private static readonly CultureInfo PtBr = CultureInfo.GetCultureInfo("pt-BR");
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
@@ -59,11 +63,17 @@ internal sealed class ConfirmGoalsNode(IChatClient chatClient, IGoalService goal
         switch (decision)
         {
             case Decisions.Confirm:
-                await SaveAsync(context.UserId, updated, cancellationToken);
+                var saved = await SaveAsync(context.UserId, updated, cancellationToken);
                 context.Draft = GoalsDraft.Empty(draft.Horizon);
-                return NodeResult.Answer(
-                    $"Salvei! ✅\n{GoalExtraction.List(updated)}\n\nQuer adicionar mais alguma meta? É só me contar.",
-                    nextStage: Stage.CollectGoals);
+                var savedText = $"Salvei! ✅\n{GoalExtraction.List(updated)}";
+
+                // Goals missing what makes them plannable are detailed now, one at a time (→ DetailGoals).
+                var toDetail = GoalDetailing.NotPlannable(saved);
+                return toDetail.Count == 0
+                    ? NodeResult.Answer($"{savedText}\n\nQuer adicionar mais alguma meta? É só me contar.", nextStage: Stage.CollectGoals)
+                    : await detailing.NextAsync(
+                        context, toDetail, $"{savedText}\n\nAgora vamos deixar cada meta pronta para planejar, uma de cada vez.",
+                        cancellationToken);
 
             case Decisions.Change when updated.Count == 0:
                 context.Draft = GoalsDraft.Empty(draft.Horizon);
@@ -84,16 +94,19 @@ internal sealed class ConfirmGoalsNode(IChatClient chatClient, IGoalService goal
         }
     }
 
-    private async Task SaveAsync(Guid userId, IReadOnlyList<GoalDraft> drafts, CancellationToken cancellationToken)
+    private async Task<List<GoalDto>> SaveAsync(Guid userId, IReadOnlyList<GoalDraft> drafts, CancellationToken cancellationToken)
     {
+        var saved = new List<GoalDto>();
         foreach (var goal in drafts)
         {
-            await goals.CreateAsync(
+            saved.Add(await goals.CreateAsync(
                 new CreateGoalRequest(
                     userId, goal.Name, goal.Description, goal.Indicator, goal.DueDate,
                     goal.StartValue, goal.TargetValue, goal.Unit),
-                cancellationToken);
+                cancellationToken));
         }
+
+        return saved;
     }
 
     // The draft goes to the AI as JSON: the exact data it must keep or change, not a text to re-read.
@@ -131,6 +144,7 @@ internal sealed class ConfirmGoalsNode(IChatClient chatClient, IGoalService goal
             mais alguma nova se a correção criou outra ambiguidade. Lista vazia se não sobrou nenhuma.
 
             {GoalExtraction.GoalFieldRules}
+            {GoalExtraction.NoInventionRule}
 
             {GoalExtraction.DoubtRules}
             """;

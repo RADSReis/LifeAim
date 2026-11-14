@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using LifeAim.Modules.Agents.Application.Workflow;
+using LifeAim.Modules.Goals.Contracts;
 
 namespace LifeAim.Modules.Agents.Application.Nodes;
 
@@ -44,8 +45,17 @@ internal static class GoalExtraction
         - unit: a unidade dos valores ("kg", "livros", "km"), ou null.
         - dueDate: o prazo desta meta no formato yyyy-MM-dd. Se a meta tem prazo próprio, use-o ("até o natal" → 25/12);
           senão use o fim do período escolhido; null se nada foi dito.
-        Nunca invente metas, números ou datas que o usuário não disse.
         """;
+
+    /// <summary>For the nodes that only understand what the user said (not for the one that proposes).</summary>
+    public const string NoInventionRule = "Nunca invente metas, números ou datas que o usuário não disse.";
+
+    /// <summary>
+    /// A goal is plannable when it says what is measured, how much and until when (Funcionalidade 1:
+    /// "nome, prazo e indicador mensurável"). The start value and unit depend on the goal, so they are optional.
+    /// </summary>
+    public static bool IsPlannable(string? indicator, decimal? targetValue, DateOnly? dueDate) =>
+        indicator is not null && targetValue is not null && dueDate is not null;
 
     /// <summary>How the AI must write doubts: always a choice, never a yes/no question. Part of both prompts.</summary>
     public const string DoubtRules =
@@ -89,6 +99,18 @@ internal static class GoalExtraction
                 Blank(g.Unit),
                 ParseDate(g.DueDate) ?? horizon))
             .ToList();
+
+    /// <summary>At most 2 short assumptions, without the final period (the summary adds one).</summary>
+    public static IReadOnlyList<string> CleanAssumptions(IEnumerable<string>? assumptions) =>
+        (assumptions ?? [])
+            .Select(a => a?.Trim().TrimEnd('.', ';').Trim() ?? "")
+            .Where(a => a.Length > 0)
+            .Take(2)
+            .ToList();
+
+    /// <summary>A saved goal in the shape the summaries and proposals use.</summary>
+    public static GoalDraft FromSaved(GoalDto goal) =>
+        new(goal.Name, goal.Description, goal.Indicator, goal.StartValue, goal.TargetValue, goal.Unit, goal.DueDate);
 
     /// <summary>"2026-12-25" → a date; anything else (or a mistake of the model) → null.</summary>
     public static DateOnly? ParseDate(string? text) =>
@@ -139,15 +161,47 @@ internal static class GoalExtraction
             .Append(":\n")
             .Append(List(draft.Goals));
 
-        if (draft.Doubts.Count == 0)
+        text.Append(draft.Doubts.Count == 0
+            ? "\n\nEstá certo? Responda **sim** para salvar, ou me diga o que quer mudar."
+            : Choices(draft.Doubts));
+        return text.ToString();
+    }
+
+    /// <summary>
+    /// The detailing question for the goal in focus: the whole goal as proposed, what was assumed, and the
+    /// three ways out (sim, pular, a correction), or the choices first when a doubt is open.
+    /// </summary>
+    public static string Proposal(GoalsDraft draft)
+    {
+        var goal = draft.Goals[0];
+        var text = new StringBuilder()
+            .Append("Vamos detalhar **").Append(goal.Name).Append("**:")
+            .Append("\n- **Indicador:** ").Append(goal.Indicator ?? "—")
+            .Append("\n- **Meta:** ").Append(Values(goal) ?? "—")
+            .Append("\n- **Prazo:** ").Append(goal.DueDate?.ToString("dd/MM/yyyy", PtBr) ?? "—");
+
+        if (goal.Description is not null)
         {
-            text.Append("\n\nEstá certo? Responda **sim** para salvar, ou me diga o que quer mudar.");
-            return text.ToString();
+            text.Append("\n- **Contexto:** ").Append(goal.Description);
         }
 
-        text.Append("\n\nAntes de salvar, preciso que você escolha:");
+        if (draft.Assumptions is { Count: > 0 } assumptions)
+        {
+            text.Append("\n\n💭 Supus: ").Append(string.Join("; ", assumptions)).Append('.');
+        }
+
+        text.Append(draft.Doubts.Count == 0
+            ? "\n\nEstá certo? Responda **sim** para salvar, **pular** para deixar como está, ou me diga o que ajustar."
+            : Choices(draft.Doubts));
+        return text.ToString();
+    }
+
+    /// <summary>The open doubts as lettered options, and how to answer them.</summary>
+    private static string Choices(IReadOnlyList<GoalDoubt> doubts)
+    {
+        var text = new StringBuilder("\n\nAntes de salvar, preciso que você escolha:");
         var index = 0;
-        foreach (var doubt in draft.Doubts)
+        foreach (var doubt in doubts)
         {
             text.Append("\n\n❓ ").Append(doubt.Question);
             foreach (var (letter, option) in Lettered(doubt, index))
@@ -158,7 +212,7 @@ internal static class GoalExtraction
             index += doubt.Options.Count;
         }
 
-        text.Append(draft.Doubts.Count == 1
+        text.Append(doubts.Count == 1
             ? "\n\nResponda só com a letra da opção (ex.: A)."
             : "\n\nResponda com uma letra para cada pergunta (ex.: A e C).");
         return text.ToString();

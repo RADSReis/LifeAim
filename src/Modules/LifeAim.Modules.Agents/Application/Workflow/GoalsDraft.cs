@@ -7,7 +7,17 @@ namespace LifeAim.Modules.Agents.Application.Workflow;
 /// <param name="Horizon">The end of the period the user chose ("fim do ano" → 31/12), once known.</param>
 /// <param name="Goals">The goals not confirmed yet.</param>
 /// <param name="Doubts">What was ambiguous, asked as a choice; nothing is saved while one is open.</param>
-internal sealed record GoalsDraft(DateOnly? Horizon, IReadOnlyList<GoalDraft> Goals, IReadOnlyList<GoalDoubt> Doubts)
+/// <param name="DetailQueue">
+/// While detailing (Stage.DetailGoals): the ids of the saved goals still to detail, the first one in focus.
+/// <see cref="Goals"/> then holds the single proposal shown for that goal.
+/// </param>
+/// <param name="Assumptions">What the proposal assumed, shown to the user ("prazo: o fim do período").</param>
+internal sealed record GoalsDraft(
+    DateOnly? Horizon,
+    IReadOnlyList<GoalDraft> Goals,
+    IReadOnlyList<GoalDoubt> Doubts,
+    IReadOnlyList<Guid>? DetailQueue = null,
+    IReadOnlyList<string>? Assumptions = null)
 {
     public static GoalsDraft Empty(DateOnly? horizon) => new(horizon, [], []);
 }
