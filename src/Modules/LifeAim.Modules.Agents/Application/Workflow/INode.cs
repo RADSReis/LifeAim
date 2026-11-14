@@ -8,6 +8,13 @@ internal interface INode
 {
     Stage Stage { get; }
 
+    /// <summary>
+    /// The question the user should be answering while the conversation is at this stage, or null when the
+    /// node waits for nothing in particular. The router repeats it to bring the user back on track.
+    /// It reads the context because it may depend on the state (the goals waiting for confirmation).
+    /// </summary>
+    string? PendingQuestion(ConversationContext context);
+
     Task<NodeResult> RunAsync(ConversationContext context, CancellationToken cancellationToken);
 }
 

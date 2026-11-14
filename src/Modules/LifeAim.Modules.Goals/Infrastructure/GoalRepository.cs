@@ -10,8 +10,9 @@ internal sealed class GoalRepository(NpgsqlDataSource dataSource)
     {
         await using var command = dataSource.CreateCommand(
             """
-            INSERT INTO goals.goals (id, user_id, name, description, indicator, due_date, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO goals.goals
+                (id, user_id, name, description, indicator, due_date, start_value, target_value, unit, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             """);
         command.Parameters.Add(new() { Value = goal.Id });
         command.Parameters.Add(new() { Value = goal.UserId });
@@ -19,6 +20,9 @@ internal sealed class GoalRepository(NpgsqlDataSource dataSource)
         command.Parameters.Add(new() { Value = (object?)goal.Description ?? DBNull.Value });
         command.Parameters.Add(new() { Value = (object?)goal.Indicator ?? DBNull.Value });
         command.Parameters.Add(new() { Value = goal.DueDate.HasValue ? goal.DueDate.Value : DBNull.Value });
+        command.Parameters.Add(new() { Value = goal.StartValue.HasValue ? goal.StartValue.Value : DBNull.Value });
+        command.Parameters.Add(new() { Value = goal.TargetValue.HasValue ? goal.TargetValue.Value : DBNull.Value });
+        command.Parameters.Add(new() { Value = (object?)goal.Unit ?? DBNull.Value });
         command.Parameters.Add(new() { Value = goal.CreatedAt });
 
         await command.ExecuteNonQueryAsync(cancellationToken);
@@ -28,7 +32,7 @@ internal sealed class GoalRepository(NpgsqlDataSource dataSource)
     {
         await using var command = dataSource.CreateCommand(
             """
-            SELECT id, user_id, name, description, indicator, due_date, created_at
+            SELECT id, user_id, name, description, indicator, due_date, start_value, target_value, unit, created_at
             FROM goals.goals
             WHERE user_id = $1
             ORDER BY created_at, id
@@ -46,7 +50,10 @@ internal sealed class GoalRepository(NpgsqlDataSource dataSource)
                 reader.IsDBNull(3) ? null : reader.GetString(3),
                 reader.IsDBNull(4) ? null : reader.GetString(4),
                 reader.IsDBNull(5) ? null : reader.GetFieldValue<DateOnly>(5),
-                reader.GetFieldValue<DateTimeOffset>(6)));
+                reader.IsDBNull(6) ? null : reader.GetDecimal(6),
+                reader.IsDBNull(7) ? null : reader.GetDecimal(7),
+                reader.IsDBNull(8) ? null : reader.GetString(8),
+                reader.GetFieldValue<DateTimeOffset>(9)));
         }
 
         return goals;

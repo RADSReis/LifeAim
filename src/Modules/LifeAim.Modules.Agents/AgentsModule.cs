@@ -39,8 +39,10 @@ public static class AgentsModule
         services.AddSingleton<INode, GreetingNode>();
         services.AddSingleton<INode, AskNameNode>();
         services.AddSingleton<INode, CollectGoalsNode>();
+        services.AddSingleton<INode, ConfirmGoalsNode>();
         services.AddSingleton<FallbackRouter>();
         services.AddSingleton<IPippin, PippinWorkflow>();
+        services.AddSingleton<IConversationReset, ConversationReset>();
 
         return services;
     }

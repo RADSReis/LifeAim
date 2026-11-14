@@ -14,7 +14,10 @@ internal sealed class GoalService(GoalRepository repository, TimeProvider timePr
             request.Description,
             request.Indicator,
             request.DueDate,
-            timeProvider.GetUtcNow());
+            timeProvider.GetUtcNow(),
+            request.StartValue,
+            request.TargetValue,
+            request.Unit);
 
         await repository.AddAsync(goal, cancellationToken);
         return ToDto(goal);
@@ -27,5 +30,7 @@ internal sealed class GoalService(GoalRepository repository, TimeProvider timePr
     }
 
     private static GoalDto ToDto(Goal goal) =>
-        new(goal.Id, goal.UserId, goal.Name, goal.Description, goal.Indicator, goal.DueDate, goal.CreatedAt);
+        new(
+            goal.Id, goal.UserId, goal.Name, goal.Description, goal.Indicator, goal.DueDate,
+            goal.StartValue, goal.TargetValue, goal.Unit, goal.CreatedAt);
 }

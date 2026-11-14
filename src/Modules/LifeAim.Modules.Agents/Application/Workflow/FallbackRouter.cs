@@ -15,13 +15,19 @@ internal sealed class FallbackRouter
         "Vasculhei meu manual de instruções e essa página não existe… 📖❌",
     ];
 
-    public NodeResult Route(ConversationContext context)
+    public const string BackToQuestion = "Mas voltando ao que eu tinha perguntado: ";
+
+    /// <param name="pendingQuestion">
+    /// The question of the current stage (INode.PendingQuestion). Not Pippin's last message: that may be a
+    /// previous router reply, and repeating it would nest the replies inside each other at every message.
+    /// </param>
+    public NodeResult Route(string? pendingQuestion)
     {
         var reply = NoFeatureReplies[Random.Shared.Next(NoFeatureReplies.Length)];
 
-        if (context.LastAssistantMessage is { } lastQuestion)
+        if (pendingQuestion is not null)
         {
-            reply += $"\n\nMas voltando ao que eu tinha perguntado: {lastQuestion}";
+            reply += "\n\n" + BackToQuestion + pendingQuestion;
         }
 
         return NodeResult.Answer(reply);

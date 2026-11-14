@@ -17,6 +17,9 @@ internal interface IConversationStore
         string assistantMessage,
         Stage messageStage,
         CancellationToken cancellationToken);
+
+    /// <summary>Deletes the state and every message of the user, all or nothing. False if there was nothing.</summary>
+    Task<bool> DeleteAsync(Guid userId, CancellationToken cancellationToken);
 }
 
-internal sealed record ConversationState(Stage Stage, string? UserName);
+internal sealed record ConversationState(Stage Stage, string? UserName, GoalsDraft? Draft = null);

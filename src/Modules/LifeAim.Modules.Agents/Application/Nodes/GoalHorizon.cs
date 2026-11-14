@@ -9,9 +9,13 @@ internal static class GoalHorizon
     // LifeAim's only user lives in Brazil; this becomes a user setting when there are more.
     private static readonly TimeZoneInfo UserTimeZone = TimeZoneInfo.FindSystemTimeZoneById("America/Sao_Paulo");
 
+    /// <summary>Today in the user's time zone (the AI needs it to turn "até o natal" into a date).</summary>
+    public static DateOnly Today(TimeProvider timeProvider) =>
+        DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(timeProvider.GetUtcNow(), UserTimeZone).DateTime);
+
     public static string Question(TimeProvider timeProvider)
     {
-        var month = TimeZoneInfo.ConvertTime(timeProvider.GetUtcNow(), UserTimeZone).Month;
+        var month = Today(timeProvider).Month;
 
         return month switch
         {

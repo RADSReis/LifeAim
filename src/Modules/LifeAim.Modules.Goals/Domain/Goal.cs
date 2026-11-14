@@ -7,6 +7,7 @@ namespace LifeAim.Modules.Goals.Domain;
 internal sealed class Goal
 {
     public const int MaxNameLength = 200;
+    public const int MaxUnitLength = 30;
 
     private Goal(
         Guid id,
@@ -15,6 +16,9 @@ internal sealed class Goal
         string? description,
         string? indicator,
         DateOnly? dueDate,
+        decimal? startValue,
+        decimal? targetValue,
+        string? unit,
         DateTimeOffset createdAt)
     {
         Id = id;
@@ -23,6 +27,9 @@ internal sealed class Goal
         Description = description;
         Indicator = indicator;
         DueDate = dueDate;
+        StartValue = startValue;
+        TargetValue = targetValue;
+        Unit = unit;
         CreatedAt = createdAt;
     }
 
@@ -30,8 +37,21 @@ internal sealed class Goal
     public Guid UserId { get; }
     public string Name { get; }
     public string? Description { get; }
+
+    /// <summary>What is measured, in words ("peso corporal").</summary>
     public string? Indicator { get; }
+
     public DateOnly? DueDate { get; }
+
+    /// <summary>Where the user is when the goal is created (94 kg).</summary>
+    public decimal? StartValue { get; }
+
+    /// <summary>Where the user wants to get (90 kg).</summary>
+    public decimal? TargetValue { get; }
+
+    /// <summary>The unit of both values (kg).</summary>
+    public string? Unit { get; }
+
     public DateTimeOffset CreatedAt { get; }
 
     public static Goal Create(
@@ -40,7 +60,10 @@ internal sealed class Goal
         string? description,
         string? indicator,
         DateOnly? dueDate,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        decimal? startValue = null,
+        decimal? targetValue = null,
+        string? unit = null)
     {
         if (userId == Guid.Empty)
         {
@@ -58,6 +81,12 @@ internal sealed class Goal
             throw new ArgumentException($"A goal name has at most {MaxNameLength} characters.", nameof(name));
         }
 
+        var trimmedUnit = Blank(unit);
+        if (trimmedUnit?.Length > MaxUnitLength)
+        {
+            throw new ArgumentException($"A unit has at most {MaxUnitLength} characters.", nameof(unit));
+        }
+
         // Version 7 GUIDs start with a timestamp, so new rows land at the end of the primary key index.
         return new Goal(
             Guid.CreateVersion7(now),
@@ -66,6 +95,9 @@ internal sealed class Goal
             Blank(description),
             Blank(indicator),
             dueDate,
+            startValue,
+            targetValue,
+            trimmedUnit,
             now.ToUniversalTime());
     }
 
@@ -77,8 +109,11 @@ internal sealed class Goal
         string? description,
         string? indicator,
         DateOnly? dueDate,
+        decimal? startValue,
+        decimal? targetValue,
+        string? unit,
         DateTimeOffset createdAt) =>
-        new(id, userId, name, description, indicator, dueDate, createdAt);
+        new(id, userId, name, description, indicator, dueDate, startValue, targetValue, unit, createdAt);
 
     private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }

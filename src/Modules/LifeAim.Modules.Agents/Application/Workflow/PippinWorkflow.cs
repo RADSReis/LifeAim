@@ -55,6 +55,7 @@ internal sealed class PippinWorkflow : IPippin
                 History = await _store.RecentMessagesAsync(message.UserId, HistorySize, cancellationToken),
                 Stage = state.Stage,
                 UserName = state.UserName,
+                Draft = state.Draft,
             };
             var stageOfThisMessage = context.Stage;
 
@@ -72,7 +73,7 @@ internal sealed class PippinWorkflow : IPippin
             // 5. Save the context and the turn.
             await _store.SaveTurnAsync(
                 message.UserId,
-                new ConversationState(context.Stage, context.UserName),
+                new ConversationState(context.Stage, context.UserName, context.Draft),
                 message.Text,
                 reply,
                 stageOfThisMessage,
@@ -90,8 +91,9 @@ internal sealed class PippinWorkflow : IPippin
     {
         try
         {
-            var result = await _nodes[context.Stage].RunAsync(context, cancellationToken);
-            return result.Expected ? result : _router.Route(context);
+            var node = _nodes[context.Stage];
+            var result = await node.RunAsync(context, cancellationToken);
+            return result.Expected ? result : _router.Route(node.PendingQuestion(context));
         }
         catch (AiNotConfiguredException)
         {

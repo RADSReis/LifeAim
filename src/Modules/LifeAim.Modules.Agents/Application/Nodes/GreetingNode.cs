@@ -12,6 +12,9 @@ internal sealed class GreetingNode : INode
 
     public Stage Stage => Stage.Greeting;
 
+    // Any first message is expected here, so the router never needs a question to go back to.
+    public string? PendingQuestion(ConversationContext context) => null;
+
     public Task<NodeResult> RunAsync(ConversationContext context, CancellationToken cancellationToken) =>
         Task.FromResult(NodeResult.Answer(Question, nextStage: Stage.AskName));
 }

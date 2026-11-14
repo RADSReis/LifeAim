@@ -23,7 +23,11 @@ internal sealed class AskNameNode(IChatClient chatClient, TimeProvider timeProvi
           uma pergunta, um pedido ou outro assunto.
         """;
 
+    public const string Question = "Como você se chama?";
+
     public Stage Stage => Stage.AskName;
+
+    public string? PendingQuestion(ConversationContext context) => Question;
 
     public async Task<NodeResult> RunAsync(ConversationContext context, CancellationToken cancellationToken)
     {
@@ -43,7 +47,7 @@ internal sealed class AskNameNode(IChatClient chatClient, TimeProvider timeProvi
             return NodeResult.NotExpected; // → the router
         }
 
-        context.UserName = answer.Name.Trim();
+        context.UserName = PersonName.Capitalize(answer.Name);
 
         var reply =
             $"Prazer, {context.UserName}! Vamos criar alguns objetivos e metas para você se tornar quem sempre sonhou ser? " +

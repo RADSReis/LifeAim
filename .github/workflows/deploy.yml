@@ -42,7 +42,8 @@ jobs:
       # Every module's migrations must apply to an empty database; the integration tests then use it.
       - name: Apply migrations
         run: dotnet run --project src/LifeAim.Migrator -c Release --no-build
-      - run: dotnet test LifeAim.sln -c Release --no-build
+      # Category=RealAI calls the real OpenAI model (costs tokens): skipped without LIFEAIM_REAL_AI=1, filtered here too.
+      - run: dotnet test LifeAim.sln -c Release --no-build --filter "Category!=RealAI"
 
   deploy:
     needs: test

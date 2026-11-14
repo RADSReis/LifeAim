@@ -1,5 +1,7 @@
+using System.Text.Json;
 using LifeAim.Modules.Agents.Application.Workflow;
 using Npgsql;
+using NpgsqlTypes;
 
 namespace LifeAim.Modules.Agents.Infrastructure;
 
@@ -9,7 +11,7 @@ internal sealed class ConversationStore(NpgsqlDataSource dataSource, TimeProvide
     public async Task<ConversationState> LoadAsync(Guid userId, CancellationToken cancellationToken)
     {
         await using var command = dataSource.CreateCommand(
-            "SELECT stage, user_name FROM agents.conversations WHERE user_id = $1");
+            "SELECT stage, user_name, draft FROM agents.conversations WHERE user_id = $1");
         command.Parameters.Add(new() { Value = userId });
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -20,8 +22,12 @@ internal sealed class ConversationStore(NpgsqlDataSource dataSource, TimeProvide
 
         return new ConversationState(
             Enum.Parse<Stage>(reader.GetString(0)),
-            reader.IsDBNull(1) ? null : reader.GetString(1));
+            reader.IsDBNull(1) ? null : reader.GetString(1),
+            reader.IsDBNull(2) ? null : JsonSerializer.Deserialize<GoalsDraft>(reader.GetString(2), Json));
     }
+
+    // camelCase, like the rest of LifeAim's JSON; DateOnly is written as "2026-12-25".
+    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     public async Task<IReadOnlyList<ConversationTurn>> RecentMessagesAsync(
         Guid userId,
@@ -69,16 +75,22 @@ internal sealed class ConversationStore(NpgsqlDataSource dataSource, TimeProvide
 
         await using (var upsert = new NpgsqlCommand(
             """
-            INSERT INTO agents.conversations (user_id, stage, user_name, updated_at)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO agents.conversations (user_id, stage, user_name, updated_at, draft)
+            VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT (user_id) DO UPDATE
-                SET stage = EXCLUDED.stage, user_name = EXCLUDED.user_name, updated_at = EXCLUDED.updated_at
+                SET stage = EXCLUDED.stage, user_name = EXCLUDED.user_name, updated_at = EXCLUDED.updated_at,
+                    draft = EXCLUDED.draft
             """, connection, transaction))
         {
             upsert.Parameters.Add(new() { Value = userId });
             upsert.Parameters.Add(new() { Value = state.Stage.ToString() });
             upsert.Parameters.Add(new() { Value = (object?)state.UserName ?? DBNull.Value });
             upsert.Parameters.Add(new() { Value = now });
+            upsert.Parameters.Add(new()
+            {
+                Value = state.Draft is null ? DBNull.Value : JsonSerializer.Serialize(state.Draft, Json),
+                NpgsqlDbType = NpgsqlDbType.Jsonb,
+            });
             await upsert.ExecuteNonQueryAsync(cancellationToken);
         }
 
@@ -88,6 +100,21 @@ internal sealed class ConversationStore(NpgsqlDataSource dataSource, TimeProvide
             connection, transaction, userId, "assistant", assistantMessage, messageStage, now.AddTicks(10), cancellationToken);
 
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task<bool> DeleteAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        // One statement (a CTE), so it is atomic without an explicit transaction.
+        await using var command = dataSource.CreateCommand(
+            """
+            WITH deleted_messages AS (DELETE FROM agents.messages WHERE user_id = $1 RETURNING 1),
+                 deleted_conversation AS (DELETE FROM agents.conversations WHERE user_id = $1 RETURNING 1)
+            SELECT (SELECT count(*) FROM deleted_messages) + (SELECT count(*) FROM deleted_conversation)
+            """);
+        command.Parameters.Add(new() { Value = userId });
+
+        var deleted = (long)(await command.ExecuteScalarAsync(cancellationToken))!;
+        return deleted > 0;
     }
 
     private static async Task InsertMessageAsync(

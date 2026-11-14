@@ -12,6 +12,9 @@ internal enum Stage
     /// <summary>Waiting for the user's name.</summary>
     AskName,
 
-    /// <summary>Waiting for the user's goals (Funcionalidade 1).</summary>
+    /// <summary>Waiting for the user's goals (Funcionalidade 1): the period, the goals, or both at once.</summary>
     CollectGoals,
+
+    /// <summary>Pippin showed the goals it understood and waits for "sim", a correction, or something else.</summary>
+    ConfirmGoals,
 }

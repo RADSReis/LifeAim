@@ -24,6 +24,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\BuildingBlocks\LifeAim.BuildingBlocks\LifeAim.BuildingBlocks.csproj" />
+    <!-- Pippin saves goals only through the Goals module's public contract (IGoalService). -->
+    <ProjectReference Include="..\LifeAim.Modules.Goals\LifeAim.Modules.Goals.csproj" />
   </ItemGroup>
 
 </Project>

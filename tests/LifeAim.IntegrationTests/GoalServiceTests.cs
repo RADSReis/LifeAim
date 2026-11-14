@@ -28,6 +28,20 @@ public sealed class GoalServiceTests(LifeAimApiFactory factory) : IClassFixture<
     }
 
     [Fact]
+    public async Task Saves_and_reads_back_the_numeric_values()
+    {
+        await Goals.CreateAsync(new CreateGoalRequest(
+            _userId, "Emagrecer até 90 kg", Indicator: "peso corporal", DueDate: new DateOnly(2026, 12, 25),
+            StartValue: 94.5m, TargetValue: 90m, Unit: "kg"));
+
+        var goal = Assert.Single(await Goals.ListAsync(_userId));
+
+        Assert.Equal(94.5m, goal.StartValue);
+        Assert.Equal(90m, goal.TargetValue);
+        Assert.Equal("kg", goal.Unit);
+    }
+
+    [Fact]
     public async Task Lists_only_the_users_own_goals()
     {
         await Goals.CreateAsync(new CreateGoalRequest(_userId, "Aprender inglês"));

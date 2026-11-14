@@ -4,3 +4,7 @@ GET {{LifeAim.Api_HostAddress}}/health
 Accept: text/plain
 
 ###
+
+### Starts a user's conversation with Pippin over (Development only). Goals are kept.
+@userId = 00000000-0000-0000-0000-000000000000
+DELETE {{LifeAim.Api_HostAddress}}/users/{{userId}}/conversation

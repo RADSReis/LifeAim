@@ -22,9 +22,8 @@ internal sealed class ConversationContext
     /// <summary>The name the user told Pippin, once known.</summary>
     public string? UserName { get; set; }
 
-    /// <summary>Pippin's last message, or null on the very first contact.</summary>
-    public string? LastAssistantMessage =>
-        History.LastOrDefault(turn => turn.Role == ConversationRole.Assistant)?.Content;
+    /// <summary>Goals understood but not confirmed yet, and the chosen period.</summary>
+    public GoalsDraft? Draft { get; set; }
 }
 
 internal enum ConversationRole
