@@ -44,6 +44,10 @@ internal sealed class PathClassifier(IChatClient chatClient)
             {
                 [Stage.CollectGoals] = "cadastrar uma meta NOVA, que ainda não existe",
             },
+            [Stage.BalanceReview] = new Dictionary<Stage, string>
+            {
+                [Stage.CollectGoals] = "cadastrar uma meta NOVA, que ainda não existe",
+            },
             [Stage.CheckIn] = new Dictionary<Stage, string>
             {
                 [Stage.CollectGoals] = "cadastrar uma meta NOVA, que ainda não existe",

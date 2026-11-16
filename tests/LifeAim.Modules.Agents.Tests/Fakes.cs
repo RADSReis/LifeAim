@@ -462,3 +462,47 @@ internal sealed class FakeReportingService : IReportingService
         return Task.FromResult(true);
     }
 }
+
+/// <summary>The priorities analysis (Funcionalidade 5) in memory: a fixed analysis, and the reviews recorded.</summary>
+internal sealed class FakeBalanceService(TimeProvider time) : IBalanceService
+{
+    public BalanceDto? Balance { get; set; }
+
+    public List<BalanceReviewDto> Reviews { get; } = [];
+
+    public List<DateOnly> Analyzed { get; } = [];
+
+    public Task<BalanceDto> AnalyzeAsync(Guid userId, DateOnly today, CancellationToken cancellationToken = default)
+    {
+        Analyzed.Add(today);
+        return Task.FromResult(Balance ?? new BalanceDto(today.AddDays(-27), today, [], [], null));
+    }
+
+    public Task<BalanceReviewDto?> GetLatestAsync(Guid userId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(Reviews.Where(r => r.UserId == userId).OrderByDescending(r => r.CreatedAt).FirstOrDefault());
+
+    public Task<BalanceReviewDto?> FindAsync(Guid reviewId, Guid userId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(Reviews.FirstOrDefault(r => r.Id == reviewId && r.UserId == userId));
+
+    public Task<bool> RecordSentAsync(RecordReviewRequest request, CancellationToken cancellationToken = default)
+    {
+        Reviews.Add(new BalanceReviewDto(
+            request.ReviewId, request.UserId, request.FocusGoalId, request.Signals, request.ProtectedGoalIds, request.Message,
+            ReviewStatus.Offered, null, time.GetUtcNow()));
+        return Task.FromResult(true);
+    }
+
+    public Task<bool> AnswerAsync(
+        Guid reviewId, Guid userId, ReviewStatus status, string? obstacle, CancellationToken cancellationToken = default)
+    {
+        var index = Reviews.FindIndex(r => r.Id == reviewId && r.UserId == userId
+                                           && r.Status is ReviewStatus.Offered or ReviewStatus.Explained);
+        if (index < 0)
+        {
+            return Task.FromResult(false);
+        }
+
+        Reviews[index] = Reviews[index] with { Status = status, Obstacle = obstacle ?? Reviews[index].Obstacle };
+        return Task.FromResult(true);
+    }
+}

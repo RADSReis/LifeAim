@@ -111,6 +111,11 @@ internal static class GoalPlan
         return routines.Select(r => r with { StartsOn = r.StartsOn ?? today, EndsOn = r.EndsOn ?? end }).ToList();
     }
 
+    /// <summary>A saved routine as an input again (to describe it, or to keep it in a new plan).</summary>
+    public static RoutineInput FromSaved(RoutineDto r) =>
+        new(r.Activity, r.Frequency, r.Source, r.Interval, r.DaysOfWeek, r.TimesPerPeriod, r.TimeOfDay, r.DayPeriod,
+            r.Amount, r.Unit, r.DurationMinutes, r.StartsOn, r.EndsOn);
+
     /// <summary>A routine back in the shape the AI reads, so a correction starts from what the user saw.</summary>
     public static ExtractedRoutine ToExtracted(RoutineInput routine) =>
         new(

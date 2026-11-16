@@ -119,6 +119,9 @@ internal sealed class GoalsAgent
               das metas. Nunca pergunte sim/não para isso.
             - Se faltar algo para fazer uma alteração, pergunte só o essencial, numa frase.
             - Não invente números, datas ou informações que o usuário não disse e as ferramentas não mostraram.
+            - Prioridades entre metas: nunca reduza ou mude o plano de uma meta que está funcionando só para abrir espaço
+              para outra, e não tente igualar os percentuais das metas. Para uma meta difícil, prefira ajustes pequenos e
+              graduais, pergunte o que atrapalha antes de sugerir, e apresente projeções sempre como estimativa.
             - Fale só das metas do usuário: não converse sobre outros assuntos.
             - Respostas curtas, no estilo de chat. Use **negrito** no nome das metas. Sem tabelas e sem títulos (#).
             - Não mostre números internos, ids ou nomes de ferramentas. Não pergunte se ele quer adicionar metas novas.

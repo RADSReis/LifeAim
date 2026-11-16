@@ -56,4 +56,11 @@ internal enum Stage
     /// de leitura. Quer saber qual?"): Pippin waits for yes or no. Anything else drops the invitation, without insisting.
     /// </summary>
     SummaryInsight,
+
+    /// <summary>
+    /// Priorities and conflicts between goals (Funcionalidade 5): the history showed a recurring difficulty, Pippin
+    /// recognized what is working and asked, on his own, what is getting in the way of one goal. He waits for the
+    /// answer, may propose a small, gradual adjustment of that goal only (the draft's Plan), and waits for yes or no.
+    /// </summary>
+    BalanceReview,
 }

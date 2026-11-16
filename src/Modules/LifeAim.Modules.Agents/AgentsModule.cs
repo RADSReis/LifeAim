@@ -1,5 +1,6 @@
 ﻿using LifeAim.BuildingBlocks;
 using LifeAim.Modules.Agents.Application.Agent;
+using LifeAim.Modules.Agents.Application.Balance;
 using LifeAim.Modules.Agents.Application.FollowUp;
 using LifeAim.Modules.Agents.Application.Nodes;
 using LifeAim.Modules.Agents.Application.Planning;
@@ -52,6 +53,7 @@ public static class AgentsModule
         services.AddSingleton<INode, RefinePlanGoalNode>();
         services.AddSingleton<INode, CheckInNode>();
         services.AddSingleton<INode, SummaryInsightNode>();
+        services.AddSingleton<INode, BalanceReviewNode>();
         services.AddSingleton<GoalDetailing>();
         services.AddSingleton<FallbackRouter>();
         services.AddSingleton<GreetingReply>();
@@ -78,6 +80,10 @@ public static class AgentsModule
         // Funcionalidade 4: the monthly summary (and quarterly panorama), counted by Reporting and written by the AI.
         services.AddSingleton<SummaryWriter>();
 
+        // Funcionalidade 5: priorities and conflicts between goals. The signals come from the history, by the rules of
+        // the Reporting module; the AI only writes the conversation.
+        services.AddSingleton<BalanceWriter>();
+
         services.AddQuartz(quartz =>
         {
             quartz.AddJob<PlanProposalsJob>(job => job.WithIdentity(PlanProposalsJob.Key));
@@ -100,6 +106,13 @@ public static class AgentsModule
                 .WithIdentity($"{MonthlySummaryJob.Key.Name}-trigger", MonthlySummaryJob.Key.Group)
                 .StartNow()
                 .WithSimpleSchedule(schedule => schedule.WithIntervalInMinutes(5).RepeatForever()));
+
+            quartz.AddJob<GoalBalanceJob>(job => job.WithIdentity(GoalBalanceJob.Key));
+            quartz.AddTrigger(trigger => trigger
+                .ForJob(GoalBalanceJob.Key)
+                .WithIdentity($"{GoalBalanceJob.Key.Name}-trigger", GoalBalanceJob.Key.Group)
+                .StartNow()
+                .WithSimpleSchedule(schedule => schedule.WithIntervalInMinutes(30).RepeatForever()));
         });
         services.AddSingleton<IConversationReset, ConversationReset>();
 

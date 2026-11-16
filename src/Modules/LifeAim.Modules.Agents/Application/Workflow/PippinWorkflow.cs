@@ -152,10 +152,60 @@ internal sealed class PippinWorkflow : IPippin
     /// The daily follow-up may start a conversation only when the user is between tasks, or still in an earlier
     /// follow-up nobody answered: never in the middle of a cadastro, a detailing or the plan proposal.
     /// </summary>
-    public static bool CanStartCheckIn(Stage stage) => stage is Stage.CollectGoals or Stage.CheckIn or Stage.SummaryInsight;
+    public static bool CanStartCheckIn(Stage stage) =>
+        stage is Stage.CollectGoals or Stage.CheckIn or Stage.SummaryInsight or Stage.BalanceReview;
 
     /// <summary>The monthly summary waits the same way: between tasks, or with a follow-up nobody answered.</summary>
     public static bool CanSendSummary(Stage stage) => stage is Stage.CollectGoals or Stage.CheckIn;
+
+    /// <summary>
+    /// A priorities review (Funcionalidade 5) is a longer conversation: only when the user is between tasks, never on
+    /// top of a follow-up or an invitation still waiting for an answer.
+    /// </summary>
+    public static bool CanStartBalanceReview(Stage stage) => stage is Stage.CollectGoals;
+
+    /// <summary>
+    /// Pippin starts, on his own, a conversation about priorities (Funcionalidade 5). Under the per-user lock: the stage
+    /// is checked again, the message sent, <paramref name="record"/> saves the review, and the conversation waits at
+    /// <see cref="Stage.BalanceReview"/> with <paramref name="question"/> as the pending question. False, with nothing
+    /// recorded, when the user is busy or the message could not be delivered.
+    /// </summary>
+    public async Task<bool> StartBalanceReviewAsync(
+        Guid userId,
+        string text,
+        Guid reviewId,
+        string question,
+        Func<CancellationToken, Task> record,
+        CancellationToken cancellationToken)
+    {
+        var userLock = UserLocks.GetOrAdd(userId, _ => new SemaphoreSlim(1, 1));
+        await userLock.WaitAsync(cancellationToken);
+        try
+        {
+            var state = await _store.LoadAsync(userId, cancellationToken);
+            if (!CanStartBalanceReview(state.Stage) || !await _channel.SendAsync(userId, text, cancellationToken))
+            {
+                return false;
+            }
+
+            await record(cancellationToken);
+            var draft = (state.Draft ?? GoalsDraft.Empty(null)) with
+            {
+                BalanceReviewId = reviewId,
+                Plan = null,
+                Question = question,
+            };
+
+            await _store.SaveProactiveAsync(
+                userId, state with { Stage = Stage.BalanceReview, Draft = draft }, text, state.Stage, cancellationToken);
+            _logger.LogInformation("Pippin started a priorities review: {From} → {To}", state.Stage, Stage.BalanceReview);
+            return true;
+        }
+        finally
+        {
+            userLock.Release();
+        }
+    }
 
     /// <summary>
     /// Pippin sends the monthly summary on his own (Funcionalidade 4). Under the per-user lock: the stage is checked
@@ -226,6 +276,10 @@ internal sealed class PippinWorkflow : IPippin
             // Follow-ups still open are kept (also when an insight invitation was waiting: it lapses, without insisting).
             var stillOpen = (state.Stage is Stage.CheckIn or Stage.SummaryInsight ? draft.CheckIns ?? [] : [])
                 .Where(old => asked.All(a => a.CheckInId != old.CheckInId));
+            // A priorities review nobody answered lapses the same way.
+            draft = state.Stage == Stage.BalanceReview
+                ? draft with { BalanceReviewId = null, Plan = null, Question = null }
+                : draft;
             draft = draft with { CheckIns = stillOpen.Concat(asked).ToList(), SummaryId = null };
 
             await _store.SaveProactiveAsync(

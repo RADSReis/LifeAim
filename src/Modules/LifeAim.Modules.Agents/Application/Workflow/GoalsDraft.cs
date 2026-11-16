@@ -29,6 +29,10 @@ namespace LifeAim.Modules.Agents.Application.Workflow;
 /// <param name="Shown">While choosing a goal of the proposal: the (up to 3) goals Pippin listed, in order.</param>
 /// <param name="CheckIns">During the daily follow-up (Stage.CheckIn): the activities Pippin asked about, still unanswered.</param>
 /// <param name="SummaryId">While waiting for the answer to the insight invitation (Stage.SummaryInsight): which summary.</param>
+/// <param name="BalanceReviewId">
+/// During a review of priorities (Stage.BalanceReview): which one. <see cref="Plan"/> then holds the adjustment Pippin
+/// proposed for the goal in focus, waiting for yes or no.
+/// </param>
 internal sealed record GoalsDraft(
     DateOnly? Horizon,
     IReadOnlyList<GoalDraft> Goals,
@@ -43,7 +47,8 @@ internal sealed record GoalsDraft(
     Guid? ProposalId = null,
     IReadOnlyList<Guid>? Shown = null,
     IReadOnlyList<CheckInItem>? CheckIns = null,
-    Guid? SummaryId = null)
+    Guid? SummaryId = null,
+    Guid? BalanceReviewId = null)
 {
     public static GoalsDraft Empty(DateOnly? horizon) => new(horizon, [], []);
 }

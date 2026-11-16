@@ -17,6 +17,10 @@ public static class ReportingModule
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<SummaryRepository>();
         services.AddSingleton<IReportingService, ReportingService>();
+
+        // Funcionalidade 5: priorities and conflicts between goals, found in the history by plain rules.
+        services.AddSingleton<BalanceReviewRepository>();
+        services.AddSingleton<IBalanceService, BalanceService>();
         return services;
     }
 }
