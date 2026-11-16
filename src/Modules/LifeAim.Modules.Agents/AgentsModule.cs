@@ -1,5 +1,6 @@
 using LifeAim.BuildingBlocks;
 using LifeAim.Modules.Agents.Application.Agent;
+using LifeAim.Modules.Agents.Application.FollowUp;
 using LifeAim.Modules.Agents.Application.Nodes;
 using LifeAim.Modules.Agents.Application.Planning;
 using LifeAim.Modules.Agents.Application.Workflow;
@@ -48,6 +49,7 @@ public static class AgentsModule
         services.AddSingleton<INode, OfferPlanNode>();
         services.AddSingleton<INode, ChoosePlanGoalNode>();
         services.AddSingleton<INode, RefinePlanGoalNode>();
+        services.AddSingleton<INode, CheckInNode>();
         services.AddSingleton<GoalDetailing>();
         services.AddSingleton<FallbackRouter>();
         services.AddSingleton<GreetingReply>();
@@ -66,6 +68,11 @@ public static class AgentsModule
         // do is in planning.proposals, so the job only polls; the host (the API) starts Quartz.
         services.AddSingleton<PlanReview>();
         services.AddSingleton<PlanProposer>();
+
+        // Funcionalidade 3: the daily follow-up. The plan and the check-ins are in the database; the job looks every
+        // minute for activities whose moment arrived (or still unanswered) and Pippin asks about them.
+        services.AddSingleton<CheckInWriter>();
+
         services.AddQuartz(quartz =>
         {
             quartz.AddJob<PlanProposalsJob>(job => job.WithIdentity(PlanProposalsJob.Key));
@@ -74,6 +81,13 @@ public static class AgentsModule
                 .WithIdentity($"{PlanProposalsJob.Key.Name}-trigger", PlanProposalsJob.Key.Group)
                 .StartNow()
                 .WithSimpleSchedule(schedule => schedule.WithIntervalInSeconds(30).RepeatForever()));
+
+            quartz.AddJob<DailyFollowUpJob>(job => job.WithIdentity(DailyFollowUpJob.Key));
+            quartz.AddTrigger(trigger => trigger
+                .ForJob(DailyFollowUpJob.Key)
+                .WithIdentity($"{DailyFollowUpJob.Key.Name}-trigger", DailyFollowUpJob.Key.Group)
+                .StartNow()
+                .WithSimpleSchedule(schedule => schedule.WithIntervalInSeconds(60).RepeatForever()));
         });
         services.AddSingleton<IConversationReset, ConversationReset>();
 

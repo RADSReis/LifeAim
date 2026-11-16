@@ -22,6 +22,7 @@ internal sealed class GoalTools(
     ConversationContext context,
     IGoalService goals,
     IProgressService progress,
+    ICheckInService checkIns,
     TimeProvider timeProvider)
 {
     private static readonly CultureInfo PtBr = CultureInfo.GetCultureInfo("pt-BR");
@@ -237,6 +238,9 @@ internal sealed class GoalTools(
             var entry = await progress.RecordAsync(
                 new RecordProgressRequest(context.UserId, goal.Id, day, note, amount is > 0 ? amount : null, unit),
                 cancellationToken);
+
+            // A follow-up still waiting for that day (Funcionalidade 3) is answered by this report.
+            await checkIns.MarkDoneForGoalAsync(context.UserId, goal.Id, day, entry.Id, cancellationToken);
             var entries = await progress.ListByGoalAsync(context.UserId, goal.Id, 200, cancellationToken);
 
             return $"Registrado na meta {goalNumber} ({goal.Name}), em {entry.OccurredOn.ToString("dd/MM/yyyy", PtBr)}: " +

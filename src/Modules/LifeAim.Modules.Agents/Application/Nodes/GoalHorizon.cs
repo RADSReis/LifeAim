@@ -14,13 +14,17 @@ internal static class GoalHorizon
         DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(timeProvider.GetUtcNow(), UserTimeZone).DateTime);
 
     /// <summary>The user's local time now.</summary>
-    public static DateTime Now(TimeProvider timeProvider) =>
-        TimeZoneInfo.ConvertTime(timeProvider.GetUtcNow(), UserTimeZone).DateTime;
+    public static DateTime Now(TimeProvider timeProvider) => Local(timeProvider.GetUtcNow());
+
+    /// <summary>A moment in the user's local time.</summary>
+    public static DateTime Local(DateTimeOffset moment) => TimeZoneInfo.ConvertTime(moment, UserTimeZone).DateTime;
 
     /// <summary>
     /// Pippin does not start a conversation before 9h or after 22h (Funcionalidade 3, "Limite padrão para mensagens").
     /// </summary>
-    public static bool IsQuietTime(TimeProvider timeProvider) => Now(timeProvider).Hour is < 9 or >= 22;
+    public static bool IsQuietTime(TimeProvider timeProvider) => IsQuietTime(Now(timeProvider));
+
+    public static bool IsQuietTime(DateTime localTime) => localTime.Hour is < 9 or >= 22;
 
     public static string Question(TimeProvider timeProvider)
     {

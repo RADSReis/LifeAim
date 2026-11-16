@@ -27,6 +27,7 @@ namespace LifeAim.Modules.Agents.Application.Workflow;
 /// </param>
 /// <param name="ProposalId">While going through the plan proposal (Funcionalidade 2): which one.</param>
 /// <param name="Shown">While choosing a goal of the proposal: the (up to 3) goals Pippin listed, in order.</param>
+/// <param name="CheckIns">During the daily follow-up (Stage.CheckIn): the activities Pippin asked about, still unanswered.</param>
 internal sealed record GoalsDraft(
     DateOnly? Horizon,
     IReadOnlyList<GoalDraft> Goals,
@@ -39,10 +40,23 @@ internal sealed record GoalsDraft(
     Stage? ReturnStage = null,
     bool ProposeAfter = false,
     Guid? ProposalId = null,
-    IReadOnlyList<Guid>? Shown = null)
+    IReadOnlyList<Guid>? Shown = null,
+    IReadOnlyList<CheckInItem>? CheckIns = null)
 {
     public static GoalsDraft Empty(DateOnly? horizon) => new(horizon, [], []);
 }
+
+/// <summary>One activity Pippin asked about in the daily follow-up (a row of progress.check_ins).</summary>
+/// <param name="Day">The day it was planned for ("ontem" when asked the next day).</param>
+/// <param name="Amount">How much was planned per session (10 "páginas"), to compare with what the user did.</param>
+internal sealed record CheckInItem(
+    Guid CheckInId,
+    Guid GoalId,
+    string GoalName,
+    string Activity,
+    DateOnly Day,
+    decimal? Amount,
+    string? Unit);
 
 /// <summary>
 /// Something ambiguous, asked as a choice between 2 or 3 options ("x or y"), never as a yes/no question:

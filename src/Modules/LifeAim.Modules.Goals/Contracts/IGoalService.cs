@@ -35,6 +35,9 @@ public interface IGoalService
 
     /// <summary>The routines of all the user's active goals, in the order they were created.</summary>
     Task<IReadOnlyList<RoutineDto>> ListRoutinesAsync(Guid userId, CancellationToken cancellationToken = default);
+
+    /// <summary>The users with at least one routine in an active goal: the ones the daily follow-up looks at.</summary>
+    Task<IReadOnlyList<Guid>> ListUserIdsWithRoutinesAsync(CancellationToken cancellationToken = default);
 }
 
 /// <param name="Indicator">What is measured, in words ("peso corporal").</param>

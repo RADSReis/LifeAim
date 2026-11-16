@@ -574,7 +574,7 @@ public class PippinWorkflowTests
             new UpdateGoalRequest(reading.Id, UserId, "Ler 2 livros", null, "livros terminados", new DateOnly(2026, 12, 31),
                 null, 2m, "livros", "vou ler seg, qua e sex de manhã"),
             Assert.Single(goals.Updated));
-        var (goalId, routines) = Assert.Single(goals.RoutinesReplaced);
+        var (goalId, routines, _) = Assert.Single(goals.RoutinesReplaced);
         Assert.Equal(reading.Id, goalId);
         // A routine runs from today until the goal's due date.
         Assert.Equal((new DateOnly(2026, 11, 13), new DateOnly(2026, 12, 31)), (routines[0].StartsOn!.Value, routines[0].EndsOn!.Value));
@@ -1074,7 +1074,7 @@ public class PippinWorkflowTests
             new FallbackRouter(),
             new GreetingReply(),
             new PathClassifier(ai),
-            new GoalsAgent(ai, goals, progress, November, NullLoggerFactory.Instance),
+            new GoalsAgent(ai, goals, progress, new FakeCheckInService(), November, NullLoggerFactory.Instance),
             goals,
             _channel,
             NullLogger<PippinWorkflow>.Instance);

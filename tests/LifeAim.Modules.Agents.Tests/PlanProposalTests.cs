@@ -204,7 +204,7 @@ public class PlanProposalTests
 
         // Sim → saved as the goal's plan, and the next chosen goal comes into focus.
         var next = await workflow.ReplyAsync(Message("sim"));
-        var (savedGoal, routines) = Assert.Single(_goals.RoutinesReplaced);
+        var (savedGoal, routines, _) = Assert.Single(_goals.RoutinesReplaced);
         Assert.Equal(goals[0].Id, savedGoal);
         Assert.Equal([6, 7], routines.Single().DaysOfWeek);
         Assert.Contains("Salvei o plano de **Ler 2 livros**", next);
@@ -349,7 +349,7 @@ public class PlanProposalTests
             new FallbackRouter(),
             new GreetingReply(),
             new PathClassifier(ai),
-            new GoalsAgent(ai, _goals, progress, time, NullLoggerFactory.Instance),
+            new GoalsAgent(ai, _goals, progress, new FakeCheckInService(), time, NullLoggerFactory.Instance),
             _goals,
             _channel,
             NullLogger<PippinWorkflow>.Instance);

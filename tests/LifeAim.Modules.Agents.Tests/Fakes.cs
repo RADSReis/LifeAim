@@ -160,7 +160,7 @@ internal sealed class FakeGoalService : IGoalService
     }
 
     /// <summary>Every plan Pippin saved: the goal and its routines, in order.</summary>
-    public List<(Guid GoalId, IReadOnlyList<RoutineInput> Routines)> RoutinesReplaced { get; } = [];
+    public List<(Guid GoalId, IReadOnlyList<RoutineInput> Routines, IReadOnlyList<RoutineDto> Dtos)> RoutinesReplaced { get; } = [];
 
     public Task<IReadOnlyList<RoutineDto>?> ReplaceRoutinesAsync(
         Guid goalId,
@@ -173,17 +173,26 @@ internal sealed class FakeGoalService : IGoalService
             return Task.FromResult<IReadOnlyList<RoutineDto>?>(null);
         }
 
-        RoutinesReplaced.Add((goalId, routines));
-        return Task.FromResult<IReadOnlyList<RoutineDto>?>(routines.Select(r => ToDto(goalId, r)).ToList());
+        var dtos = routines.Select(r => ToDto(goalId, r)).ToList();
+        RoutinesReplaced.Add((goalId, routines, dtos));
+        return Task.FromResult<IReadOnlyList<RoutineDto>?>(dtos);
     }
 
     public Task<IReadOnlyList<RoutineDto>> ListRoutinesAsync(Guid userId, CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<RoutineDto>>(
-            RoutinesReplaced.GroupBy(r => r.GoalId).SelectMany(g => g.Last().Routines.Select(r => ToDto(g.Key, r))).ToList());
+            RoutinesReplaced.GroupBy(r => r.GoalId).SelectMany(g => g.Last().Dtos).ToList());
 
-    private static RoutineDto ToDto(Guid goalId, RoutineInput r) =>
+    public Task<IReadOnlyList<Guid>> ListUserIdsWithRoutinesAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<Guid>>(Saved
+            .Where(g => !Cancelled.Contains(g.Id) && RoutinesReplaced.Any(r => r.GoalId == g.Id && r.Routines.Count > 0))
+            .Select(g => g.UserId).Distinct().ToList());
+
+    /// <summary>Routines created at a fixed moment (their start, when they have no StartsOn), for the follow-up tests.</summary>
+    public DateTimeOffset RoutinesCreatedAt { get; set; } = DateTimeOffset.UtcNow;
+
+    private RoutineDto ToDto(Guid goalId, RoutineInput r) =>
         new(Guid.CreateVersion7(), goalId, r.Activity, r.Frequency, r.Interval, r.DaysOfWeek ?? [], r.TimesPerPeriod,
-            r.TimeOfDay, r.DayPeriod, r.Amount, r.Unit, r.DurationMinutes, r.Source, r.StartsOn, r.EndsOn, DateTimeOffset.UtcNow);
+            r.TimeOfDay, r.DayPeriod, r.Amount, r.Unit, r.DurationMinutes, r.Source, r.StartsOn, r.EndsOn, RoutinesCreatedAt);
 
     /// <summary>A goal saved earlier, at <paramref name="createdAt"/> (only the name: not plannable yet).</summary>
     public GoalDto Add(Guid userId, string name, DateTimeOffset createdAt)
@@ -314,5 +323,74 @@ internal sealed class FakePippinChannel : IPippinChannel
         }
 
         return Task.FromResult(Delivers);
+    }
+}
+
+/// <summary>The check-ins in memory, with the same rules as progress.check_ins (one per activity per day).</summary>
+internal sealed class FakeCheckInService(TimeProvider? time = null) : ICheckInService
+{
+    private readonly TimeProvider _time = time ?? TimeProvider.System;
+
+    public List<CheckInDto> CheckIns { get; } = [];
+
+    public Task<IReadOnlyList<CheckInDto>> ListAsync(
+        Guid userId, DateOnly from, DateOnly to, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<CheckInDto>>(
+            CheckIns.Where(c => c.UserId == userId && c.Day >= from && c.Day <= to).OrderBy(c => c.Day).ToList());
+
+    public Task<CheckInDto> MarkAskedAsync(AskCheckInRequest request, CancellationToken cancellationToken = default)
+    {
+        var now = _time.GetUtcNow();
+        var index = CheckIns.FindIndex(c => c.RoutineId == request.RoutineId && c.Day == request.Day);
+        if (index < 0)
+        {
+            CheckIns.Add(new CheckInDto(
+                Guid.CreateVersion7(), request.UserId, request.GoalId, request.RoutineId, request.Day, request.Activity,
+                CheckInStatus.Asked, 1, now, now, null, null));
+            return Task.FromResult(CheckIns[^1]);
+        }
+
+        if (CheckIns[index].Status == CheckInStatus.Asked)
+        {
+            CheckIns[index] = CheckIns[index] with { TimesAsked = CheckIns[index].TimesAsked + 1, LastAskedAt = now };
+        }
+
+        return Task.FromResult(CheckIns[index]);
+    }
+
+    public Task<bool> MarkDoneAsync(Guid checkInId, Guid userId, Guid? progressEntryId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(Answer(c => c.Id == checkInId && c.UserId == userId, CheckInStatus.Done, null) == 1);
+
+    public Task<bool> MarkMissedAsync(Guid checkInId, Guid userId, string? reason, CancellationToken cancellationToken = default) =>
+        Task.FromResult(Answer(c => c.Id == checkInId && c.UserId == userId, CheckInStatus.Missed, reason) == 1);
+
+    public Task<int> MarkDoneForGoalAsync(
+        Guid userId, Guid goalId, DateOnly day, Guid? progressEntryId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(Answer(c => c.UserId == userId && c.GoalId == goalId && c.Day == day, CheckInStatus.Done, null));
+
+    /// <summary>A check-in already in the "database", e.g. asked earlier and never answered.</summary>
+    public CheckInDto Add(Guid userId, Guid goalId, Guid routineId, DateOnly day, string activity, DateTimeOffset askedAt,
+        CheckInStatus status = CheckInStatus.Asked, int timesAsked = 1)
+    {
+        var checkIn = new CheckInDto(
+            Guid.CreateVersion7(), userId, goalId, routineId, day, activity, status, timesAsked, askedAt, askedAt,
+            status == CheckInStatus.Asked ? null : askedAt, null);
+        CheckIns.Add(checkIn);
+        return checkIn;
+    }
+
+    private int Answer(Func<CheckInDto, bool> which, CheckInStatus status, string? reason)
+    {
+        var count = 0;
+        for (var i = 0; i < CheckIns.Count; i++)
+        {
+            if (which(CheckIns[i]) && CheckIns[i].Status == CheckInStatus.Asked)
+            {
+                CheckIns[i] = CheckIns[i] with { Status = status, Reason = reason, AnsweredAt = _time.GetUtcNow() };
+                count++;
+            }
+        }
+
+        return count;
     }
 }

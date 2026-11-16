@@ -44,4 +44,10 @@ internal enum Stage
     /// the user until they agree (saved as the goal's plan), skip it, or move on.
     /// </summary>
     RefinePlanGoal,
+
+    /// <summary>
+    /// The daily follow-up (Funcionalidade 3): Pippin asked, on his own, about the activities planned for now (and the
+    /// ones still unconfirmed) and waits to hear whether they happened. The activities asked are in the draft.
+    /// </summary>
+    CheckIn,
 }

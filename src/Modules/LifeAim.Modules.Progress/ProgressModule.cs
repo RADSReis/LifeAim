@@ -17,6 +17,8 @@ public static class ProgressModule
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<ProgressRepository>();
         services.AddSingleton<IProgressService, ProgressService>();
+        services.AddSingleton<CheckInRepository>();
+        services.AddSingleton<ICheckInService, CheckInService>();
         return services;
     }
 }

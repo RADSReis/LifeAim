@@ -167,6 +167,27 @@ internal sealed class GoalRepository(NpgsqlDataSource dataSource)
         await transaction.CommitAsync(cancellationToken);
     }
 
+    /// <summary>The users with at least one routine in an active goal (the daily follow-up looks at them).</summary>
+    public async Task<IReadOnlyList<Guid>> ListUserIdsWithRoutinesAsync(CancellationToken cancellationToken)
+    {
+        await using var command = dataSource.CreateCommand(
+            """
+            SELECT DISTINCT r.user_id
+            FROM goals.goal_routines r
+            JOIN goals.goals g ON g.id = r.goal_id
+            WHERE g.status = 'active'
+            """);
+
+        var users = new List<Guid>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            users.Add(reader.GetGuid(0));
+        }
+
+        return users;
+    }
+
     public async Task<IReadOnlyList<GoalRoutine>> ListRoutinesByUserAsync(Guid userId, CancellationToken cancellationToken)
     {
         await using var command = dataSource.CreateCommand(

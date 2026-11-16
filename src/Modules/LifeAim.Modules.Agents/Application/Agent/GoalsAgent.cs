@@ -33,6 +33,7 @@ internal sealed class GoalsAgent
     private readonly IChatClient _chatClient;
     private readonly IGoalService _goals;
     private readonly IProgressService _progress;
+    private readonly ICheckInService _checkIns;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<GoalsAgent> _logger;
 
@@ -40,6 +41,7 @@ internal sealed class GoalsAgent
         IChatClient chatClient,
         IGoalService goals,
         IProgressService progress,
+        ICheckInService checkIns,
         TimeProvider timeProvider,
         ILoggerFactory loggerFactory)
     {
@@ -50,13 +52,14 @@ internal sealed class GoalsAgent
             .Build();
         _goals = goals;
         _progress = progress;
+        _checkIns = checkIns;
         _timeProvider = timeProvider;
         _logger = loggerFactory.CreateLogger<GoalsAgent>();
     }
 
     public async Task<AgentReply> ReplyAsync(ConversationContext context, CancellationToken cancellationToken)
     {
-        var tools = new GoalTools(context, _goals, _progress, _timeProvider);
+        var tools = new GoalTools(context, _goals, _progress, _checkIns, _timeProvider);
 
         // The recent conversation as real chat turns, so "e o prazo dela?" knows which goal "dela" is.
         List<ChatMessage> messages = [new(ChatRole.System, Instructions(context))];

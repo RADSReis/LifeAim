@@ -148,6 +148,52 @@ internal sealed class PippinWorkflow : IPippin
         }
     }
 
+    /// <summary>
+    /// The daily follow-up may start a conversation only when the user is between tasks, or still in an earlier
+    /// follow-up nobody answered: never in the middle of a cadastro, a detailing or the plan proposal.
+    /// </summary>
+    public static bool CanStartCheckIn(Stage stage) => stage is Stage.CollectGoals or Stage.CheckIn;
+
+    /// <summary>
+    /// Pippin asks, on his own, about the activities of the daily follow-up (Funcionalidade 3). Under the same per-user
+    /// lock as the replies: the stage is checked again, the message sent, then <paramref name="markAsked"/> records the
+    /// check-ins and the conversation waits at <see cref="Stage.CheckIn"/> with them (plus the ones still unanswered from
+    /// an earlier follow-up). False, with nothing recorded, when the user is busy or the message could not be delivered.
+    /// </summary>
+    public async Task<bool> StartCheckInAsync(
+        Guid userId,
+        string text,
+        Func<CancellationToken, Task<IReadOnlyList<CheckInItem>>> markAsked,
+        CancellationToken cancellationToken)
+    {
+        var userLock = UserLocks.GetOrAdd(userId, _ => new SemaphoreSlim(1, 1));
+        await userLock.WaitAsync(cancellationToken);
+        try
+        {
+            var state = await _store.LoadAsync(userId, cancellationToken);
+            if (!CanStartCheckIn(state.Stage) || !await _channel.SendAsync(userId, text, cancellationToken))
+            {
+                return false;
+            }
+
+            var asked = await markAsked(cancellationToken);
+            var draft = state.Draft ?? GoalsDraft.Empty(null);
+            var stillOpen = (state.Stage == Stage.CheckIn ? draft.CheckIns ?? [] : [])
+                .Where(old => asked.All(a => a.CheckInId != old.CheckInId));
+            draft = draft with { CheckIns = stillOpen.Concat(asked).ToList() };
+
+            await _store.SaveProactiveAsync(
+                userId, state with { Stage = Stage.CheckIn, Draft = draft }, text, state.Stage, cancellationToken);
+            _logger.LogInformation(
+                "Pippin follow-up asked about {Count} activities: {From} → {To}", asked.Count, state.Stage, Stage.CheckIn);
+            return true;
+        }
+        finally
+        {
+            userLock.Release();
+        }
+    }
+
     private async Task<NodeResult> RunAsync(ConversationContext context, CancellationToken cancellationToken)
     {
         try
@@ -172,7 +218,7 @@ internal sealed class PippinWorkflow : IPippin
                 result = await node.RunAsync(context, cancellationToken);
                 if (result.Expected)
                 {
-                    return NodeResult.Answer($"{note}\n\n{result.Reply}", result.NextStage);
+                    return note is null ? result : NodeResult.Answer($"{note}\n\n{result.Reply}", result.NextStage);
                 }
             }
 

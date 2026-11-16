@@ -70,6 +70,9 @@ internal sealed class GoalService(GoalRepository repository, TimeProvider timePr
         return created.Select(ToDto).ToList();
     }
 
+    public Task<IReadOnlyList<Guid>> ListUserIdsWithRoutinesAsync(CancellationToken cancellationToken = default) =>
+        repository.ListUserIdsWithRoutinesAsync(cancellationToken);
+
     public async Task<IReadOnlyList<RoutineDto>> ListRoutinesAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         var routines = await repository.ListRoutinesByUserAsync(userId, cancellationToken);

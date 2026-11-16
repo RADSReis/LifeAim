@@ -77,5 +77,5 @@ internal sealed record NodeResult
     /// <paramref name="movedTo"/>, but the message itself is about something else: the workflow handles it from
     /// there (greeting or path classifier) and starts the reply with <paramref name="note"/>.
     /// </summary>
-    public static NodeResult NotExpectedAfter(string note, Stage? movedTo) => new(false, null, movedTo, note: note);
+    public static NodeResult NotExpectedAfter(string? note, Stage? movedTo) => new(false, null, movedTo, note: note);
 }
