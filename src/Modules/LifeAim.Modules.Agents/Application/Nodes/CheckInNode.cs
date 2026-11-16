@@ -53,8 +53,10 @@ internal sealed class CheckInNode(
         // Only the ones still open: one may have been answered meanwhile ("hoje li 10 páginas" through the goals agent).
         var asked = draft.CheckIns ?? [];
         var recent = await checkIns.ListAsync(context.UserId, today.AddDays(-MissWindowDays), today, cancellationToken);
+        // A goal paused or ended meanwhile (Funcionalidade 6) is not asked about any more: its check-in stays unconfirmed.
         var open = asked
             .Where(i => recent.Any(c => c.Id == i.CheckInId && c.Status == CheckInStatus.Asked))
+            .Where(i => context.SavedGoals.Any(g => g.Id == i.GoalId))
             .ToList();
 
         if (open.Count == 0)

@@ -77,6 +77,9 @@ internal sealed class PippinWorkflow : IPippin
                 UserName = state.UserName,
                 Draft = state.Draft,
                 SavedGoals = state.Stage == Stage.Greeting ? [] : await _goals.ListAsync(message.UserId, cancellationToken),
+                PausedGoals = state.Stage == Stage.Greeting
+                    ? []
+                    : (await _goals.ListHistoryAsync(message.UserId, cancellationToken)).Where(g => g.Status == GoalStatus.Paused).ToList(),
             };
             var stageOfThisMessage = context.Stage;
 
@@ -153,7 +156,46 @@ internal sealed class PippinWorkflow : IPippin
     /// follow-up nobody answered: never in the middle of a cadastro, a detailing or the plan proposal.
     /// </summary>
     public static bool CanStartCheckIn(Stage stage) =>
-        stage is Stage.CollectGoals or Stage.CheckIn or Stage.SummaryInsight or Stage.BalanceReview;
+        stage is Stage.CollectGoals or Stage.CheckIn or Stage.SummaryInsight or Stage.BalanceReview or Stage.ResumeGoal;
+
+    /// <summary>Asking whether a paused goal comes back (Funcionalidade 6) waits for the user to be between tasks.</summary>
+    public static bool CanOfferResume(Stage stage) => stage is Stage.CollectGoals;
+
+    /// <summary>
+    /// Pippin asks, on his own, whether a paused goal comes back (Funcionalidade 6). Under the per-user lock: the stage
+    /// is checked again, the message sent, <paramref name="markOffered"/> records that it was asked, and the
+    /// conversation waits at <see cref="Stage.ResumeGoal"/>. False, with nothing recorded, when the user is busy or the
+    /// message could not be delivered.
+    /// </summary>
+    public async Task<bool> OfferResumeAsync(
+        Guid userId,
+        Guid goalId,
+        string text,
+        Func<CancellationToken, Task<bool>> markOffered,
+        CancellationToken cancellationToken)
+    {
+        var userLock = UserLocks.GetOrAdd(userId, _ => new SemaphoreSlim(1, 1));
+        await userLock.WaitAsync(cancellationToken);
+        try
+        {
+            var state = await _store.LoadAsync(userId, cancellationToken);
+            if (!CanOfferResume(state.Stage) || !await _channel.SendAsync(userId, text, cancellationToken))
+            {
+                return false;
+            }
+
+            await markOffered(cancellationToken);
+            var draft = (state.Draft ?? GoalsDraft.Empty(null)) with { ResumeGoalId = goalId };
+            await _store.SaveProactiveAsync(
+                userId, state with { Stage = Stage.ResumeGoal, Draft = draft }, text, state.Stage, cancellationToken);
+            _logger.LogInformation("Pippin asked whether goal {GoalId} comes back: {From} → {To}", goalId, state.Stage, Stage.ResumeGoal);
+            return true;
+        }
+        finally
+        {
+            userLock.Release();
+        }
+    }
 
     /// <summary>The monthly summary waits the same way: between tasks, or with a follow-up nobody answered.</summary>
     public static bool CanSendSummary(Stage stage) => stage is Stage.CollectGoals or Stage.CheckIn;
@@ -279,7 +321,7 @@ internal sealed class PippinWorkflow : IPippin
             // A priorities review nobody answered lapses the same way.
             draft = state.Stage == Stage.BalanceReview
                 ? draft with { BalanceReviewId = null, Plan = null, Question = null }
-                : draft;
+                : draft with { ResumeGoalId = null };
             draft = draft with { CheckIns = stillOpen.Concat(asked).ToList(), SummaryId = null };
 
             await _store.SaveProactiveAsync(
@@ -388,8 +430,24 @@ internal sealed class PippinWorkflow : IPippin
             {
                 CancelGoalId = goal.Id,
                 ReturnStage = context.Stage,
+                CancelReason = answer.CancellationReason,
+                Replacement = null,
             };
             return NodeResult.Answer(ConfirmCancelGoalNode.Question(goal.Name), Stage.ConfirmCancelGoal);
+        }
+
+        // Replacing ends the old goal: the same explicit "sim" (Funcionalidade 6), asked by the code.
+        if (answer.ReplacementRequested is { } replacement)
+        {
+            context.Draft = (context.Draft ?? GoalsDraft.Empty(null)) with
+            {
+                CancelGoalId = replacement.Goal.Id,
+                ReturnStage = context.Stage,
+                CancelReason = replacement.Reason,
+                Replacement = replacement.NewGoal,
+            };
+            return NodeResult.Answer(
+                ConfirmCancelGoalNode.ReplaceQuestion(replacement.Goal.Name, replacement.NewGoal.Name), Stage.ConfirmCancelGoal);
         }
 
         var reply = string.IsNullOrWhiteSpace(answer.Text) ? "Acho que não entendi direito. 🤔" : answer.Text;

@@ -3,6 +3,7 @@ using LifeAim.Modules.Agents.Application.Agent;
 using LifeAim.Modules.Agents.Application.Balance;
 using LifeAim.Modules.Agents.Application.FollowUp;
 using LifeAim.Modules.Agents.Application.Nodes;
+using LifeAim.Modules.Agents.Application.Pauses;
 using LifeAim.Modules.Agents.Application.Planning;
 using LifeAim.Modules.Agents.Application.Reports;
 using LifeAim.Modules.Agents.Application.Workflow;
@@ -54,6 +55,7 @@ public static class AgentsModule
         services.AddSingleton<INode, CheckInNode>();
         services.AddSingleton<INode, SummaryInsightNode>();
         services.AddSingleton<INode, BalanceReviewNode>();
+        services.AddSingleton<INode, ResumeGoalNode>();
         services.AddSingleton<GoalDetailing>();
         services.AddSingleton<FallbackRouter>();
         services.AddSingleton<GreetingReply>();
@@ -111,6 +113,14 @@ public static class AgentsModule
             quartz.AddTrigger(trigger => trigger
                 .ForJob(GoalBalanceJob.Key)
                 .WithIdentity($"{GoalBalanceJob.Key.Name}-trigger", GoalBalanceJob.Key.Group)
+                .StartNow()
+                .WithSimpleSchedule(schedule => schedule.WithIntervalInMinutes(30).RepeatForever()));
+
+            // Funcionalidade 6: a pause that reaches the day the user chose → Pippin asks whether the goal comes back.
+            quartz.AddJob<PausedGoalsJob>(job => job.WithIdentity(PausedGoalsJob.Key));
+            quartz.AddTrigger(trigger => trigger
+                .ForJob(PausedGoalsJob.Key)
+                .WithIdentity($"{PausedGoalsJob.Key.Name}-trigger", PausedGoalsJob.Key.Group)
                 .StartNow()
                 .WithSimpleSchedule(schedule => schedule.WithIntervalInMinutes(30).RepeatForever()));
         });

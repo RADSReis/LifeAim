@@ -1,6 +1,7 @@
 using LifeAim.Modules.Goals.Contracts;
 using LifeAim.Modules.Goals.Domain;
 using Npgsql;
+using NpgsqlTypes;
 
 namespace LifeAim.Modules.Goals.Infrastructure;
 
@@ -9,13 +10,22 @@ internal sealed class GoalRepository(NpgsqlDataSource dataSource)
 {
     public async Task AddAsync(Goal goal, CancellationToken cancellationToken)
     {
-        await using var command = dataSource.CreateCommand(
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var command = InsertCommand(goal, connection, null);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static NpgsqlCommand InsertCommand(Goal goal, NpgsqlConnection connection, NpgsqlTransaction? transaction)
+    {
+        var command = new NpgsqlCommand(
             """
             INSERT INTO goals.goals
                 (id, user_id, name, description, indicator, due_date, start_value, target_value, unit, user_plan,
                  created_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-            """);
+            """,
+            connection,
+            transaction);
         command.Parameters.Add(new() { Value = goal.Id });
         command.Parameters.Add(new() { Value = goal.UserId });
         command.Parameters.Add(new() { Value = goal.Name });
@@ -27,8 +37,7 @@ internal sealed class GoalRepository(NpgsqlDataSource dataSource)
         command.Parameters.Add(new() { Value = (object?)goal.Unit ?? DBNull.Value });
         command.Parameters.Add(new() { Value = (object?)goal.UserPlan ?? DBNull.Value });
         command.Parameters.Add(new() { Value = goal.CreatedAt });
-
-        await command.ExecuteNonQueryAsync(cancellationToken);
+        return command;
     }
 
     /// <summary>Writes the editable fields; false when no goal with that id belongs to that user.</summary>
@@ -56,20 +65,185 @@ internal sealed class GoalRepository(NpgsqlDataSource dataSource)
     }
 
     /// <summary>
-    /// Marks an active goal as cancelled; its row, routines and history stay. False when no active goal with
-    /// that id belongs to that user (also when it was already cancelled).
+    /// Ends an active or paused goal (cancelled): its row, routines and history stay. False when no such goal
+    /// belongs to that user (also when it was already ended). The change is written to goal_status_changes.
     /// </summary>
-    public async Task<bool> CancelAsync(Guid id, Guid userId, DateTimeOffset now, CancellationToken cancellationToken)
+    public Task<bool> CancelAsync(Guid id, Guid userId, string? reason, DateTimeOffset now, CancellationToken cancellationToken) =>
+        ChangeStatusAsync(
+            id, userId, GoalLifecycle.CanCancel, GoalStatus.Cancelled, reason, null, now,
+            "cancelled_at = $5, paused_at = NULL, resume_on = NULL, resume_offered_at = NULL",
+            cancellationToken);
+
+    /// <summary>Pauses an active goal, or changes the day a paused one comes back.</summary>
+    public Task<bool> PauseAsync(
+        Guid id, Guid userId, DateOnly? resumeOn, string? reason, DateTimeOffset now, CancellationToken cancellationToken) =>
+        ChangeStatusAsync(
+            id, userId, GoalLifecycle.CanPause, GoalStatus.Paused, reason, resumeOn, now,
+            "paused_at = COALESCE(g.paused_at, $5), resume_on = $6, resume_offered_at = NULL",
+            cancellationToken);
+
+    public Task<bool> ResumeAsync(Guid id, Guid userId, DateTimeOffset now, CancellationToken cancellationToken) =>
+        ChangeStatusAsync(
+            id, userId, GoalLifecycle.CanResume, GoalStatus.Active, null, null, now,
+            "paused_at = NULL, resume_on = NULL, resume_offered_at = NULL, status_reason = NULL",
+            cancellationToken);
+
+    /// <summary>
+    /// Inserts the new goal and closes the old one as replaced by it, in one transaction: if the old one is not the
+    /// user's active or paused goal, nothing is written and the result is false.
+    /// </summary>
+    public async Task<bool> ReplaceAsync(
+        Guid id, Guid userId, Goal replacement, string? reason, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        await using (var insert = InsertCommand(replacement, connection, transaction))
+        {
+            await insert.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using var update = new NpgsqlCommand(
+            """
+            WITH old AS (
+                SELECT id, status FROM goals.goals
+                WHERE id = $1 AND user_id = $2 AND status = ANY($3) FOR UPDATE
+            ), changed AS (
+                UPDATE goals.goals g
+                SET status = 'replaced', replaced_by = $4, status_reason = $5, cancelled_at = $6,
+                    paused_at = NULL, resume_on = NULL, resume_offered_at = NULL
+                FROM old WHERE g.id = old.id
+                RETURNING old.status AS from_status
+            )
+            INSERT INTO goals.goal_status_changes (id, goal_id, user_id, from_status, to_status, reason, resume_on, changed_at)
+            SELECT $7, $1, $2, from_status, 'replaced', $5, NULL, $6 FROM changed
+            """,
+            connection,
+            transaction);
+        update.Parameters.Add(new() { Value = id });
+        update.Parameters.Add(new() { Value = userId });
+        update.Parameters.Add(new() { Value = GoalLifecycle.CanReplace.Select(GoalLifecycle.ToText).ToArray() });
+        update.Parameters.Add(new() { Value = replacement.Id });
+        update.Parameters.Add(new() { Value = (object?)reason ?? DBNull.Value, NpgsqlDbType = NpgsqlDbType.Text });
+        update.Parameters.Add(new() { Value = now });
+        update.Parameters.Add(new() { Value = Guid.CreateVersion7(now) });
+
+        if (await update.ExecuteNonQueryAsync(cancellationToken) != 1)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return false;
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        return true;
+    }
+
+    /// <summary>The user's goals that are not active (paused, cancelled, replaced), oldest first.</summary>
+    public async Task<IReadOnlyList<GoalDto>> ListHistoryAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        await using var command = dataSource.CreateCommand(
+            $"""
+             SELECT {HistoryColumns} FROM goals.goals
+             WHERE user_id = $1 AND status <> 'active'
+             ORDER BY created_at, id
+             """);
+        command.Parameters.Add(new() { Value = userId });
+        return await ReadHistoryAsync(command, cancellationToken);
+    }
+
+    /// <summary>Paused goals (of every user) whose pause ended and that Pippin has not asked about yet.</summary>
+    public async Task<IReadOnlyList<GoalDto>> ListPausesEndingAsync(DateOnly today, CancellationToken cancellationToken)
+    {
+        await using var command = dataSource.CreateCommand(
+            $"""
+             SELECT {HistoryColumns} FROM goals.goals
+             WHERE status = 'paused' AND resume_on <= $1 AND resume_offered_at IS NULL
+             ORDER BY resume_on, id
+             """);
+        command.Parameters.Add(new() { Value = today });
+        return await ReadHistoryAsync(command, cancellationToken);
+    }
+
+    public async Task<bool> MarkResumeOfferedAsync(Guid id, Guid userId, DateTimeOffset now, CancellationToken cancellationToken)
     {
         await using var command = dataSource.CreateCommand(
             """
-            UPDATE goals.goals
-            SET status = 'cancelled', cancelled_at = $3
-            WHERE id = $1 AND user_id = $2 AND status = 'active'
+            UPDATE goals.goals SET resume_offered_at = $3
+            WHERE id = $1 AND user_id = $2 AND status = 'paused' AND resume_offered_at IS NULL
             """);
         command.Parameters.Add(new() { Value = id });
         command.Parameters.Add(new() { Value = userId });
         command.Parameters.Add(new() { Value = now });
+        return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
+    }
+
+    private const string HistoryColumns =
+        "id, user_id, name, description, indicator, due_date, start_value, target_value, unit, user_plan, created_at, " +
+        "status, resume_on, status_reason, replaced_by, COALESCE(cancelled_at, paused_at)";
+
+    private static async Task<IReadOnlyList<GoalDto>> ReadHistoryAsync(NpgsqlCommand command, CancellationToken cancellationToken)
+    {
+        var goals = new List<GoalDto>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            goals.Add(new GoalDto(
+                reader.GetGuid(0),
+                reader.GetGuid(1),
+                reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4),
+                reader.IsDBNull(5) ? null : reader.GetFieldValue<DateOnly>(5),
+                reader.IsDBNull(6) ? null : reader.GetDecimal(6),
+                reader.IsDBNull(7) ? null : reader.GetDecimal(7),
+                reader.IsDBNull(8) ? null : reader.GetString(8),
+                reader.GetFieldValue<DateTimeOffset>(10),
+                reader.IsDBNull(9) ? null : reader.GetString(9),
+                GoalLifecycle.Parse(reader.GetString(11)),
+                reader.IsDBNull(12) ? null : reader.GetFieldValue<DateOnly>(12),
+                reader.IsDBNull(13) ? null : reader.GetString(13),
+                reader.IsDBNull(14) ? null : reader.GetGuid(14),
+                reader.IsDBNull(15) ? null : reader.GetFieldValue<DateTimeOffset>(15)));
+        }
+
+        return goals;
+    }
+
+    // One statement: the goal changes only from an allowed status, and the change is logged with where it came from.
+    // $1 id, $2 user, $3 allowed statuses, $4 new status, $5 now, $6 resume_on, $7 reason, $8 id of the log row.
+    private async Task<bool> ChangeStatusAsync(
+        Guid id,
+        Guid userId,
+        IReadOnlyList<GoalStatus> from,
+        GoalStatus to,
+        string? reason,
+        DateOnly? resumeOn,
+        DateTimeOffset now,
+        string set,
+        CancellationToken cancellationToken)
+    {
+        var reasonSet = to == GoalStatus.Active ? "" : ", status_reason = $7";
+        await using var command = dataSource.CreateCommand(
+            $"""
+             WITH old AS (
+                 SELECT id, status FROM goals.goals
+                 WHERE id = $1 AND user_id = $2 AND status = ANY($3) FOR UPDATE
+             ), changed AS (
+                 UPDATE goals.goals g SET status = $4, {set}{reasonSet}
+                 FROM old WHERE g.id = old.id
+                 RETURNING old.status AS from_status
+             )
+             INSERT INTO goals.goal_status_changes (id, goal_id, user_id, from_status, to_status, reason, resume_on, changed_at)
+             SELECT $8, $1, $2, from_status, $4, $7, $6, $5 FROM changed
+             """);
+        command.Parameters.Add(new() { Value = id });
+        command.Parameters.Add(new() { Value = userId });
+        command.Parameters.Add(new() { Value = from.Select(GoalLifecycle.ToText).ToArray() });
+        command.Parameters.Add(new() { Value = GoalLifecycle.ToText(to) });
+        command.Parameters.Add(new() { Value = now });
+        command.Parameters.Add(new() { Value = resumeOn.HasValue ? resumeOn.Value : DBNull.Value, NpgsqlDbType = NpgsqlDbType.Date });
+        command.Parameters.Add(new() { Value = (object?)reason ?? DBNull.Value, NpgsqlDbType = NpgsqlDbType.Text });
+        command.Parameters.Add(new() { Value = Guid.CreateVersion7(now) });
 
         return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
     }
@@ -188,7 +362,12 @@ internal sealed class GoalRepository(NpgsqlDataSource dataSource)
         return users;
     }
 
-    public async Task<IReadOnlyList<GoalRoutine>> ListRoutinesByUserAsync(Guid userId, CancellationToken cancellationToken)
+    /// <summary>
+    /// The routines of the user's active goals; with <paramref name="goalId"/>, the routines of that one goal of the
+    /// user, whatever its status (a paused goal keeps its plan).
+    /// </summary>
+    public async Task<IReadOnlyList<GoalRoutine>> ListRoutinesByUserAsync(
+        Guid userId, CancellationToken cancellationToken, Guid? goalId = null)
     {
         await using var command = dataSource.CreateCommand(
             """
@@ -197,10 +376,11 @@ internal sealed class GoalRepository(NpgsqlDataSource dataSource)
                    r.created_at
             FROM goals.goal_routines r
             JOIN goals.goals g ON g.id = r.goal_id
-            WHERE r.user_id = $1 AND g.status = 'active'
+            WHERE r.user_id = $1 AND ($2::uuid IS NULL AND g.status = 'active' OR r.goal_id = $2)
             ORDER BY r.created_at, r.id
             """);
         command.Parameters.Add(new() { Value = userId });
+        command.Parameters.Add(new() { Value = goalId.HasValue ? goalId.Value : DBNull.Value, NpgsqlDbType = NpgsqlDbType.Uuid });
 
         var routines = new List<GoalRoutine>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);

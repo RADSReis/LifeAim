@@ -24,7 +24,13 @@ internal sealed class ReportingService(
         var closesQuarter = ReportCalculator.ClosesQuarter(month);
         var from = closesQuarter ? first.AddMonths(-2) : first.AddMonths(-1);
 
-        var userGoals = await goals.ListAsync(userId, cancellationToken);
+        // A goal paused, ended or replaced during the period still counts what was done while it was active
+        // (Funcionalidade 6: the history is kept). Its routines are not listed any more, so only its real activity counts.
+        var history = await goals.ListHistoryAsync(userId, cancellationToken);
+        var fromDay = new DateTimeOffset(from.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
+        var userGoals = (await goals.ListAsync(userId, cancellationToken))
+            .Concat(history.Where(g => g.StatusChangedAt >= fromDay))
+            .ToList();
         var routines = await goals.ListRoutinesAsync(userId, cancellationToken);
         var entries = await progress.ListAsync(userId, from, last, cancellationToken);
         var asked = await checkIns.ListAsync(userId, from, last, cancellationToken);

@@ -123,21 +123,92 @@ internal sealed class FakeGoalService : IGoalService
     }
 
     public Task<IReadOnlyList<GoalDto>> ListAsync(Guid userId, CancellationToken cancellationToken = default) =>
-        Task.FromResult<IReadOnlyList<GoalDto>>(
-            Saved.Where(g => g.UserId == userId && !Cancelled.Contains(g.Id)).ToList());
+        Task.FromResult<IReadOnlyList<GoalDto>>(Saved.Where(g => g.UserId == userId && IsActive(g.Id)).ToList());
 
     /// <summary>The goals cancelled: they stay in <see cref="Saved"/>, as in the database, but leave the list.</summary>
     public List<Guid> Cancelled { get; } = [];
 
-    public Task<bool> CancelAsync(Guid goalId, Guid userId, CancellationToken cancellationToken = default)
+    /// <summary>Where each goal that is not active is (Funcionalidade 6), with the same rules as goals.goals.</summary>
+    public Dictionary<Guid, GoalDto> Lifecycle { get; } = [];
+
+    /// <summary>The paused goals Pippin already asked about.</summary>
+    public HashSet<Guid> ResumeOffered { get; } = [];
+
+    public DateTimeOffset Now { get; set; } = DateTimeOffset.UtcNow;
+
+    public Task<bool> CancelAsync(Guid goalId, Guid userId, CancellationToken cancellationToken = default) =>
+        CancelAsync(goalId, userId, null, cancellationToken);
+
+    public Task<bool> CancelAsync(Guid goalId, Guid userId, string? reason, CancellationToken cancellationToken = default)
     {
-        var active = Saved.Any(g => g.Id == goalId && g.UserId == userId) && !Cancelled.Contains(goalId);
-        if (active)
+        if (!Change(goalId, userId, [GoalStatus.Active, GoalStatus.Paused], GoalStatus.Cancelled, reason, null))
         {
-            Cancelled.Add(goalId);
+            return Task.FromResult(false);
         }
 
-        return Task.FromResult(active);
+        Cancelled.Add(goalId);
+        return Task.FromResult(true);
+    }
+
+    public Task<bool> PauseAsync(
+        Guid goalId, Guid userId, DateOnly? resumeOn, string? reason, CancellationToken cancellationToken = default)
+    {
+        ResumeOffered.Remove(goalId);
+        return Task.FromResult(Change(goalId, userId, [GoalStatus.Active, GoalStatus.Paused], GoalStatus.Paused, reason, resumeOn));
+    }
+
+    public Task<bool> ResumeAsync(Guid goalId, Guid userId, CancellationToken cancellationToken = default)
+    {
+        if (!Change(goalId, userId, [GoalStatus.Paused], GoalStatus.Active, null, null))
+        {
+            return Task.FromResult(false);
+        }
+
+        Lifecycle.Remove(goalId);
+        return Task.FromResult(true);
+    }
+
+    public async Task<GoalDto?> ReplaceAsync(
+        Guid goalId, CreateGoalRequest replacement, string? reason, CancellationToken cancellationToken = default)
+    {
+        if (StatusOf(goalId) is not (GoalStatus.Active or GoalStatus.Paused)
+            || !Saved.Any(g => g.Id == goalId && g.UserId == replacement.UserId))
+        {
+            return null;
+        }
+
+        var created = await CreateAsync(replacement, cancellationToken);
+        Change(goalId, replacement.UserId, [GoalStatus.Active, GoalStatus.Paused], GoalStatus.Replaced, reason, null);
+        Lifecycle[goalId] = Lifecycle[goalId] with { ReplacedBy = created.Id };
+        return created;
+    }
+
+    public Task<IReadOnlyList<GoalDto>> ListHistoryAsync(Guid userId, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<GoalDto>>(
+            Saved.Where(g => g.UserId == userId && Lifecycle.ContainsKey(g.Id)).Select(g => Lifecycle[g.Id]).ToList());
+
+    public Task<IReadOnlyList<GoalDto>> ListPausesEndingAsync(DateOnly today, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<GoalDto>>(Lifecycle.Values
+            .Where(g => g is { Status: GoalStatus.Paused, ResumeOn: { } day } && day <= today && !ResumeOffered.Contains(g.Id))
+            .ToList());
+
+    public Task<bool> MarkResumeOfferedAsync(Guid goalId, Guid userId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(StatusOf(goalId) == GoalStatus.Paused && ResumeOffered.Add(goalId));
+
+    public GoalStatus StatusOf(Guid goalId) => Lifecycle.TryGetValue(goalId, out var goal) ? goal.Status : GoalStatus.Active;
+
+    private bool IsActive(Guid goalId) => StatusOf(goalId) == GoalStatus.Active && !Cancelled.Contains(goalId);
+
+    private bool Change(Guid goalId, Guid userId, GoalStatus[] from, GoalStatus to, string? reason, DateOnly? resumeOn)
+    {
+        var goal = Saved.FirstOrDefault(g => g.Id == goalId && g.UserId == userId);
+        if (goal is null || !from.Contains(StatusOf(goalId)) || Cancelled.Contains(goalId))
+        {
+            return false;
+        }
+
+        Lifecycle[goalId] = goal with { Status = to, ResumeOn = resumeOn, StatusReason = reason, StatusChangedAt = Now };
+        return true;
     }
 
     public List<UpdateGoalRequest> Updated { get; } = [];
@@ -179,13 +250,20 @@ internal sealed class FakeGoalService : IGoalService
         return Task.FromResult<IReadOnlyList<RoutineDto>?>(dtos);
     }
 
+    // Like the database: only the routines of active goals (a paused goal keeps its plan, out of the lists).
     public Task<IReadOnlyList<RoutineDto>> ListRoutinesAsync(Guid userId, CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<RoutineDto>>(
-            RoutinesReplaced.GroupBy(r => r.GoalId).SelectMany(g => g.Last().Dtos).ToList());
+            RoutinesReplaced.Where(r => IsActive(r.GoalId)).GroupBy(r => r.GoalId).SelectMany(g => g.Last().Dtos).ToList());
+
+    public Task<IReadOnlyList<RoutineDto>> ListGoalRoutinesAsync(
+        Guid goalId, Guid userId, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<RoutineDto>>(Saved.Any(g => g.Id == goalId && g.UserId == userId)
+            ? RoutinesReplaced.Where(r => r.GoalId == goalId).Select(r => r.Dtos).LastOrDefault() ?? []
+            : []);
 
     public Task<IReadOnlyList<Guid>> ListUserIdsWithRoutinesAsync(CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<Guid>>(Saved
-            .Where(g => !Cancelled.Contains(g.Id) && RoutinesReplaced.Any(r => r.GoalId == g.Id && r.Routines.Count > 0))
+            .Where(g => IsActive(g.Id) && RoutinesReplaced.Any(r => r.GoalId == g.Id && r.Routines.Count > 0))
             .Select(g => g.UserId).Distinct().ToList());
 
     /// <summary>Routines created at a fixed moment (their start, when they have no StartsOn), for the follow-up tests.</summary>

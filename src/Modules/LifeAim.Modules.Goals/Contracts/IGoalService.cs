@@ -15,7 +15,52 @@ public interface IGoalService
     /// Cancels one of the user's active goals: it leaves every list, but its row, plan and history are kept
     /// (Funcionalidade 6). False when there is no such active goal.
     /// </summary>
-    Task<bool> CancelAsync(Guid goalId, Guid userId, CancellationToken cancellationToken = default);
+    Task<bool> CancelAsync(Guid goalId, Guid userId, CancellationToken cancellationToken = default) =>
+        CancelAsync(goalId, userId, null, cancellationToken);
+
+    /// <summary>
+    /// Ends one of the user's active or paused goals (Funcionalidade 6, "encerramento"), with why, when the user said.
+    /// Not a failure: the row, plan and history are kept. False when there is no such goal.
+    /// </summary>
+    Task<bool> CancelAsync(Guid goalId, Guid userId, string? reason, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Pauses one of the user's goals (Funcionalidade 6, "pausa temporária"): it leaves the lists, the follow-up and
+    /// the summaries until it is resumed; its plan stays. <paramref name="resumeOn"/>, when given, is the day Pippin
+    /// asks whether to resume. Pausing a paused goal only changes that day. False when there is no such goal.
+    /// </summary>
+    Task<bool> PauseAsync(
+        Guid goalId,
+        Guid userId,
+        DateOnly? resumeOn,
+        string? reason,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>A paused goal comes back, with its plan as it was. False when it is not one of the user's paused goals.</summary>
+    Task<bool> ResumeAsync(Guid goalId, Guid userId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Replaces one of the user's active or paused goals by a new one, in one transaction (Funcionalidade 6,
+    /// "substituição"): the old goal is closed as replaced, pointing at the new one, and keeps its history. The new
+    /// goal starts without a plan. Null when there is no such goal.
+    /// </summary>
+    Task<GoalDto?> ReplaceAsync(
+        Guid goalId,
+        CreateGoalRequest replacement,
+        string? reason,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>The user's paused, cancelled and replaced goals, oldest first: the path walked, even when not completed.</summary>
+    Task<IReadOnlyList<GoalDto>> ListHistoryAsync(Guid userId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Every user's paused goals whose pause ends on or before <paramref name="today"/> and that Pippin has not asked
+    /// about yet.
+    /// </summary>
+    Task<IReadOnlyList<GoalDto>> ListPausesEndingAsync(DateOnly today, CancellationToken cancellationToken = default);
+
+    /// <summary>Pippin asked whether to resume this paused goal: he does not ask again during this pause.</summary>
+    Task<bool> MarkResumeOfferedAsync(Guid goalId, Guid userId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Replaces the editable fields of one of the user's goals (everything but id, user and creation time).
@@ -35,6 +80,12 @@ public interface IGoalService
 
     /// <summary>The routines of all the user's active goals, in the order they were created.</summary>
     Task<IReadOnlyList<RoutineDto>> ListRoutinesAsync(Guid userId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The plan of one of the user's goals, whatever its status (a paused goal keeps its plan); empty when the goal has
+    /// none or is someone else's.
+    /// </summary>
+    Task<IReadOnlyList<RoutineDto>> ListGoalRoutinesAsync(Guid goalId, Guid userId, CancellationToken cancellationToken = default);
 
     /// <summary>The users with at least one routine in an active goal: the ones the daily follow-up looks at.</summary>
     Task<IReadOnlyList<Guid>> ListUserIdsWithRoutinesAsync(CancellationToken cancellationToken = default);
@@ -69,6 +120,11 @@ public sealed record UpdateGoalRequest(
     string? Unit,
     string? UserPlan);
 
+/// <param name="Status">Active for every goal of <see cref="IGoalService.ListAsync"/>; the others come from the history.</param>
+/// <param name="ResumeOn">For a paused goal: the day the pause ends, when the user said one.</param>
+/// <param name="StatusReason">Why it was paused, ended or replaced, in the user's words.</param>
+/// <param name="ReplacedBy">For a replaced goal: the goal that took its place.</param>
+/// <param name="StatusChangedAt">When it was paused or ended.</param>
 public sealed record GoalDto(
     Guid Id,
     Guid UserId,
@@ -80,7 +136,29 @@ public sealed record GoalDto(
     decimal? TargetValue,
     string? Unit,
     DateTimeOffset CreatedAt,
-    string? UserPlan = null);
+    string? UserPlan = null,
+    GoalStatus Status = GoalStatus.Active,
+    DateOnly? ResumeOn = null,
+    string? StatusReason = null,
+    Guid? ReplacedBy = null,
+    DateTimeOffset? StatusChangedAt = null);
+
+/// <summary>
+/// Where a goal is (Funcionalidade 6). None of these is a failure: priorities, circumstances and wishes change.
+/// </summary>
+public enum GoalStatus
+{
+    Active,
+
+    /// <summary>A temporary pause: out of the follow-up and the summaries, with its plan kept, until it comes back.</summary>
+    Paused,
+
+    /// <summary>Ended by the user: it no longer makes sense. Its history is kept.</summary>
+    Cancelled,
+
+    /// <summary>Ended because another goal took its place (<see cref="GoalDto.ReplacedBy"/>).</summary>
+    Replaced,
+}
 
 public enum RoutineFrequency
 {

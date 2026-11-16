@@ -29,6 +29,9 @@ internal sealed class ConversationContext
 
     /// <summary>The user's goals already saved, read from the Goals module at the start of the message.</summary>
     public IReadOnlyList<GoalDto> SavedGoals { get; init; } = [];
+
+    /// <summary>The user's paused goals (Funcionalidade 6), oldest first: out of the lists, but they can come back.</summary>
+    public IReadOnlyList<GoalDto> PausedGoals { get; init; } = [];
 }
 
 internal enum ConversationRole

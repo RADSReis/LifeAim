@@ -63,4 +63,11 @@ internal enum Stage
     /// answer, may propose a small, gradual adjustment of that goal only (the draft's Plan), and waits for yes or no.
     /// </summary>
     BalanceReview,
+
+    /// <summary>
+    /// The pause of a goal ended on the day the user chose (Funcionalidade 6): Pippin asked, on his own, whether it comes
+    /// back. Yes resumes it with its plan; "mais um tempo" keeps it paused (maybe until another day); "não quero mais"
+    /// goes to the explicit confirmation of the cancellation. Anything else drops the question, without insisting.
+    /// </summary>
+    ResumeGoal,
 }

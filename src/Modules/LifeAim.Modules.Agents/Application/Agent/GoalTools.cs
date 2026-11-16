@@ -36,6 +36,15 @@ internal sealed class GoalTools(
     /// </summary>
     public GoalDto? CancellationRequested { get; private set; }
 
+    /// <summary>Why the user wants to end it, when they said (kept with the goal's history).</summary>
+    public string? CancellationReason { get; private set; }
+
+    /// <summary>
+    /// The goal the user asked to replace, and the new one (Funcionalidade 6). Ending a goal needs the same explicit
+    /// "sim" as a cancellation, so the workflow asks it in code too.
+    /// </summary>
+    public GoalReplacement? ReplacementRequested { get; private set; }
+
     /// <summary>Names of the tools called, in order, for the log.</summary>
     public List<string> Called { get; } = [];
 
@@ -51,7 +60,18 @@ internal sealed class GoalTools(
             "Substitui o plano inteiro de uma meta salva por estas rotinas (as antigas são apagadas). " +
             "Passe TODAS as rotinas que devem ficar, inclusive as que não mudaram."),
         AIFunctionFactory.Create(RequestGoalCancellation, "request_goal_cancellation",
-            "Pede o cancelamento de uma meta salva. NÃO cancela: o sistema pede a confirmação explícita ao usuário."),
+            "Pede o encerramento (cancelamento) de uma meta salva que não faz mais sentido. NÃO cancela: o sistema pede " +
+            "a confirmação explícita ao usuário. O histórico da meta fica guardado."),
+        AIFunctionFactory.Create(RequestGoalReplacement, "request_goal_replacement",
+            "Pede a substituição de uma meta salva por uma nova (\"troca a corrida por natação\"). NÃO substitui: o " +
+            "sistema pede a confirmação explícita. A meta antiga fica no histórico; a nova começa sem plano."),
+        AIFunctionFactory.Create(PauseGoalAsync, "pause_goal",
+            "Pausa uma meta salva por um tempo: ela sai do acompanhamento e dos resumos até voltar, e o plano fica " +
+            "guardado. Também serve para mudar o dia de volta de uma meta já pausada (use pausedNumber)."),
+        AIFunctionFactory.Create(ResumeGoalAsync, "resume_goal",
+            "Retoma uma meta pausada (número da lista de metas pausadas), com o plano que ela tinha."),
+        AIFunctionFactory.Create(GoalHistoryAsync, "goal_history",
+            "Mostra as metas pausadas, encerradas e substituídas, com datas, motivos e o progresso registrado em cada uma."),
         AIFunctionFactory.Create(RecordProgressAsync, "record_progress",
             "Registra algo que o usuário fez por uma meta (\"hoje li 10 páginas\", \"corri 5 km\", \"pesei 92 kg\"), " +
             "mesmo que a unidade não seja a do indicador principal da meta."),
@@ -188,19 +208,169 @@ internal sealed class GoalTools(
     }
 
     public async Task<string> RequestGoalCancellation(
-        [Description("O número da meta na lista de metas salvas.")] int goalNumber,
+        [Description("O número da meta na lista de metas salvas; null se for uma meta pausada.")] int? goalNumber = null,
+        [Description("O motivo, nas palavras do usuário, se ele disse; senão null.")] string? reason = null,
+        [Description("O número da meta na lista de metas pausadas, se for uma delas; senão null.")] int? pausedNumber = null,
         CancellationToken cancellationToken = default)
     {
         Called.Add("request_goal_cancellation");
-        if (await FindAsync(goalNumber, cancellationToken) is not { } goal)
+        if (await FindAnyAsync(goalNumber, pausedNumber, cancellationToken) is not { } goal)
         {
-            return NotFound(goalNumber);
+            return NotFoundAny;
         }
 
-        CancellationRequested = goal;
+        (CancellationRequested, CancellationReason, ReplacementRequested) = (goal, Blank(reason), null);
         return "Pedido anotado. O sistema vai pedir a confirmação ao usuário: não diga que a meta foi cancelada " +
                "e não faça você a pergunta de confirmação.";
     }
+
+    public async Task<string> RequestGoalReplacement(
+        [Description("Nome curto da meta nova.")] string newName,
+        [Description("O número da meta que sai, na lista de metas salvas; null se for uma meta pausada.")] int? goalNumber = null,
+        [Description("O número da meta que sai, na lista de metas pausadas, se for uma delas; senão null.")] int? pausedNumber = null,
+        [Description("Descrição da meta nova (contexto), ou null.")] string? newDescription = null,
+        [Description("Prazo da meta nova, yyyy-MM-dd, ou null (então vale o prazo da antiga).")] string? newDueDate = null,
+        [Description("O motivo da troca, nas palavras do usuário, se ele disse; senão null.")] string? reason = null,
+        CancellationToken cancellationToken = default)
+    {
+        Called.Add("request_goal_replacement");
+        if (await FindAnyAsync(goalNumber, pausedNumber, cancellationToken) is not { } goal)
+        {
+            return NotFoundAny;
+        }
+
+        if (Blank(newName) is not { } name)
+        {
+            return "Erro: a meta nova precisa de um nome. Nada foi pedido.";
+        }
+
+        var due = goal.DueDate;
+        if (newDueDate is not null && (due = GoalExtraction.ParseDate(newDueDate)) is null)
+        {
+            return $"Erro: \"{newDueDate}\" não é uma data no formato yyyy-MM-dd. Nada foi pedido.";
+        }
+
+        ReplacementRequested = new GoalReplacement(goal, new GoalDraft(name, Blank(newDescription), null, null, null, null, due), Blank(reason));
+        CancellationRequested = null;
+        return "Pedido anotado. O sistema vai pedir a confirmação ao usuário: não diga que a meta foi substituída " +
+               "e não faça você a pergunta de confirmação.";
+    }
+
+    public async Task<string> PauseGoalAsync(
+        [Description("O número da meta na lista de metas salvas; null se for uma meta já pausada.")] int? goalNumber = null,
+        [Description("O número da meta na lista de metas pausadas, para mudar o dia de volta; senão null.")] int? pausedNumber = null,
+        [Description("O dia em que a pausa termina, yyyy-MM-dd, se o usuário disse (\"por duas semanas\" → calcule); senão null.")]
+        string? resumeOn = null,
+        [Description("O motivo da pausa, nas palavras do usuário, se ele disse; senão null.")] string? reason = null,
+        CancellationToken cancellationToken = default)
+    {
+        Called.Add("pause_goal");
+        if (await FindAnyAsync(goalNumber, pausedNumber, cancellationToken) is not { } goal)
+        {
+            return NotFoundAny;
+        }
+
+        DateOnly? day = null;
+        if (resumeOn is not null)
+        {
+            day = GoalExtraction.ParseDate(resumeOn);
+            if (day is null || day <= GoalHorizon.Today(timeProvider))
+            {
+                return $"Erro: \"{resumeOn}\" não é um dia futuro no formato yyyy-MM-dd. Nada foi pausado.";
+            }
+        }
+
+        if (!await goals.PauseAsync(goal.Id, context.UserId, day, Blank(reason), cancellationToken))
+        {
+            return "Erro: não deu para pausar essa meta. Nada foi alterado.";
+        }
+
+        return $"Meta \"{goal.Name}\" pausada" +
+               (day is { } d ? $" até {d.ToString("dd/MM/yyyy", PtBr)} (nesse dia o Pippin pergunta se quer retomar)." : " sem data para voltar.") +
+               " O plano e o histórico ficam guardados; ela sai do acompanhamento diário e dos resumos enquanto estiver pausada.";
+    }
+
+    public async Task<string> ResumeGoalAsync(
+        [Description("O número da meta na lista de metas pausadas.")] int pausedNumber,
+        CancellationToken cancellationToken = default)
+    {
+        Called.Add("resume_goal");
+        if (await FindPausedAsync(pausedNumber, cancellationToken) is not { } goal)
+        {
+            return $"Erro: não existe a meta pausada {pausedNumber}. Confira o número na lista de metas pausadas.";
+        }
+
+        if (!await goals.ResumeAsync(goal.Id, context.UserId, cancellationToken))
+        {
+            return "Erro: não deu para retomar essa meta. Nada foi alterado.";
+        }
+
+        var routines = (await goals.ListRoutinesAsync(context.UserId, cancellationToken)).Where(r => r.GoalId == goal.Id).ToList();
+        return $"Meta \"{goal.Name}\" retomada. " + (routines.Count == 0
+            ? "Ela não tem plano ainda."
+            : "O plano continua:\n" + string.Join("\n", routines.Select(r => "- " + GoalPlan.Describe(GoalPlan.FromSaved(r)))));
+    }
+
+    public async Task<string> GoalHistoryAsync(CancellationToken cancellationToken = default)
+    {
+        Called.Add("goal_history");
+        var history = await goals.ListHistoryAsync(context.UserId, cancellationToken);
+        if (history.Count == 0)
+        {
+            return "Nenhuma meta pausada, encerrada ou substituída.";
+        }
+
+        var all = (await goals.ListAsync(context.UserId, cancellationToken)).Concat(history).ToList();
+        var text = new StringBuilder();
+        foreach (var goal in history)
+        {
+            var since = goal.StatusChangedAt is { } at ? GoalHorizon.Local(at).ToString("dd/MM/yyyy", PtBr) : "?";
+            text.Append("\n- ").Append(goal.Name).Append(": ").Append(goal.Status switch
+            {
+                GoalStatus.Paused => $"pausada desde {since}" +
+                                     (goal.ResumeOn is { } back ? $", volta em {back.ToString("dd/MM/yyyy", PtBr)}" : ", sem data para voltar"),
+                GoalStatus.Replaced => $"substituída em {since} por \"{all.FirstOrDefault(g => g.Id == goal.ReplacedBy)?.Name ?? "outra meta"}\"",
+                _ => $"encerrada em {since}",
+            });
+            if (goal.StatusReason is { } reason)
+            {
+                text.Append(" (motivo: ").Append(reason).Append(')');
+            }
+
+            var entries = await progress.ListByGoalAsync(context.UserId, goal.Id, 200, cancellationToken);
+            text.Append(". ").Append(entries.Count == 0
+                ? "Sem progresso registrado."
+                : $"{entries.Count} registro(s) de progresso" + Totals(entries) + ".");
+        }
+
+        return "Histórico (o caminho percorrido, mesmo sem a meta concluída):" + text;
+    }
+
+    private static string Totals(IReadOnlyList<ProgressEntryDto> entries)
+    {
+        var totals = entries.Where(e => e.Amount is not null && e.Unit is not null)
+            .GroupBy(e => e.Unit!)
+            .Select(g => $"{GoalExtraction.Number(g.Sum(e => e.Amount!.Value))} {g.Key}")
+            .ToList();
+        return totals.Count == 0 ? "" : $", somando {string.Join(" e ", totals)}";
+    }
+
+    private const string NotFoundAny =
+        "Erro: não encontrei essa meta. Confira o número na lista de metas salvas (goalNumber) ou pausadas (pausedNumber).";
+
+    private async Task<GoalDto?> FindAnyAsync(int? goalNumber, int? pausedNumber, CancellationToken cancellationToken) =>
+        goalNumber is { } n ? await FindAsync(n, cancellationToken)
+        : pausedNumber is { } p ? await FindPausedAsync(p, cancellationToken)
+        : null;
+
+    // The paused goals as numbered in the prompt: the user's paused goals, oldest first.
+    private async Task<GoalDto?> FindPausedAsync(int pausedNumber, CancellationToken cancellationToken)
+    {
+        var paused = (await goals.ListHistoryAsync(context.UserId, cancellationToken)).Where(g => g.Status == GoalStatus.Paused).ToList();
+        return pausedNumber >= 1 && pausedNumber <= paused.Count ? paused[pausedNumber - 1] : null;
+    }
+
+    private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     public async Task<string> RecordProgressAsync(
         [Description("O número da meta na lista de metas salvas.")] int goalNumber,

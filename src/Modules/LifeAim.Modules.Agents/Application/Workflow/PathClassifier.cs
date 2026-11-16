@@ -44,6 +44,10 @@ internal sealed class PathClassifier(IChatClient chatClient)
             {
                 [Stage.CollectGoals] = "cadastrar uma meta NOVA, que ainda não existe",
             },
+            [Stage.ResumeGoal] = new Dictionary<Stage, string>
+            {
+                [Stage.CollectGoals] = "cadastrar uma meta NOVA, que ainda não existe",
+            },
             [Stage.BalanceReview] = new Dictionary<Stage, string>
             {
                 [Stage.CollectGoals] = "cadastrar uma meta NOVA, que ainda não existe",
@@ -98,7 +102,7 @@ internal sealed class PathClassifier(IChatClient chatClient)
             case "clarify":
                 return new PathDecision(PathKind.Clarify, null, null, Blank(answer.Clarification), reason);
 
-            case "goal_talk" when context.SavedGoals.Count > 0:
+            case "goal_talk" when context.SavedGoals.Count + context.PausedGoals.Count > 0:
                 return new PathDecision(PathKind.GoalTalk, null, null, null, reason);
 
             default:
@@ -122,12 +126,13 @@ internal sealed class PathClassifier(IChatClient chatClient)
             : string.Join("\n", context.SavedGoals.Select((g, i) => $"{i + 1}. {g.Name}"));
 
         // Only with saved goals: there is nothing to consult, change, cancel or report progress on before that.
-        var goalTalk = context.SavedGoals.Count == 0
+        var goalTalk = context.SavedGoals.Count + context.PausedGoals.Count == 0
             ? ""
             : """
               - "goal_talk": a mensagem é sobre as metas JÁ SALVAS: ver ou consultar informações ("me mostra a meta do
                 peso", "quais são minhas metas?", "como estou na leitura?"), alterar (nome, quantidade, prazo, valores,
-                dias ou horários do plano), cancelar ou excluir uma meta, ou registrar progresso ("hoje li 10 páginas",
+                dias ou horários do plano), pausar, retomar, cancelar, excluir ou trocar uma meta por outra, ver as metas
+                pausadas ou encerradas, ou registrar progresso ("hoje li 10 páginas",
                 "corri 5 km ontem", "pesei 92 kg"). Prefira goal_talk a goto para esses pedidos.
               """;
 

@@ -33,6 +33,12 @@ namespace LifeAim.Modules.Agents.Application.Workflow;
 /// During a review of priorities (Stage.BalanceReview): which one. <see cref="Plan"/> then holds the adjustment Pippin
 /// proposed for the goal in focus, waiting for yes or no.
 /// </param>
+/// <param name="CancelReason">While confirming a cancellation or a replacement: why, when the user said.</param>
+/// <param name="Replacement">
+/// While confirming a replacement (Stage.ConfirmCancelGoal with <see cref="CancelGoalId"/>): the new goal that takes
+/// the place of the old one.
+/// </param>
+/// <param name="ResumeGoalId">While asking whether a paused goal comes back (Stage.ResumeGoal): which one.</param>
 internal sealed record GoalsDraft(
     DateOnly? Horizon,
     IReadOnlyList<GoalDraft> Goals,
@@ -48,7 +54,10 @@ internal sealed record GoalsDraft(
     IReadOnlyList<Guid>? Shown = null,
     IReadOnlyList<CheckInItem>? CheckIns = null,
     Guid? SummaryId = null,
-    Guid? BalanceReviewId = null)
+    Guid? BalanceReviewId = null,
+    string? CancelReason = null,
+    GoalDraft? Replacement = null,
+    Guid? ResumeGoalId = null)
 {
     public static GoalsDraft Empty(DateOnly? horizon) => new(horizon, [], []);
 }

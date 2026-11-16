@@ -62,7 +62,10 @@ internal sealed class GoalsAgent
         var tools = new GoalTools(context, _goals, _progress, _checkIns, _timeProvider);
 
         // The recent conversation as real chat turns, so "e o prazo dela?" knows which goal "dela" is.
-        List<ChatMessage> messages = [new(ChatRole.System, Instructions(context))];
+        var paused = (await _goals.ListHistoryAsync(context.UserId, cancellationToken))
+            .Where(g => g.Status == GoalStatus.Paused)
+            .ToList();
+        List<ChatMessage> messages = [new(ChatRole.System, Instructions(context, paused))];
         messages.AddRange(context.History.TakeLast(HistoryInPrompt).Select(turn =>
             new ChatMessage(turn.Role == ConversationRole.User ? ChatRole.User : ChatRole.Assistant, turn.Content)));
         messages.Add(new ChatMessage(ChatRole.User, context.IncomingText));
@@ -71,11 +74,17 @@ internal sealed class GoalsAgent
             messages, new ChatOptions { Tools = tools.All() }, cancellationToken);
 
         _logger.LogInformation("Goals agent called [{Tools}]", string.Join(", ", tools.Called));
-        return new AgentReply(response.Text.Trim(), tools.CancellationRequested);
+        return new AgentReply(
+            response.Text.Trim(), tools.CancellationRequested, tools.CancellationReason, tools.ReplacementRequested);
     }
 
-    private string Instructions(ConversationContext context)
+    private string Instructions(ConversationContext context, IReadOnlyList<GoalDto> paused)
     {
+        var pausedList = paused.Count == 0
+            ? "nenhuma"
+            : string.Join("\n", paused.Select((g, i) =>
+                $"{i + 1}. {g.Name}" + (g.ResumeOn is { } back ? $" · volta em {back:yyyy-MM-dd}" : " · sem data para voltar")));
+
         var today = GoalHorizon.Today(_timeProvider);
         var goals = new StringBuilder();
         for (var i = 0; i < context.SavedGoals.Count; i++)
@@ -96,6 +105,9 @@ internal sealed class GoalsAgent
             Metas salvas do usuário (use o número nas ferramentas):
             {goals.ToString().TrimEnd()}
 
+            Metas pausadas (use pausedNumber nas ferramentas):
+            {pausedList}
+
             Nesta conversa você pode, usando as ferramentas:
             - Consultar uma meta: chame get_goal e mostre as informações completas de forma organizada e curta.
               Para "quais são minhas metas?", a lista acima basta.
@@ -104,8 +116,20 @@ internal sealed class GoalsAgent
             - Alterar o plano (dias, horários, quanto por vez): chame replace_goal_plan com TODAS as rotinas que devem
               ficar (veja as atuais com get_goal antes). Salve só o que o usuário disse ou aprovou; se ele pedir uma
               sugestão, proponha e pergunte se pode salvar (depois do sim, salve com proposedByPippin true).
-            - Cancelar ou excluir uma meta: chame request_goal_cancellation. Nunca diga que a meta foi cancelada: o
-              sistema pede a confirmação.
+            - Pausar, encerrar ou substituir uma meta (prioridades, circunstâncias e desejos mudam; nada disso é fracasso):
+              - Pausa temporária ("vou dar um tempo", "volto a correr em janeiro"): chame pause_goal, com resumeOn se ele
+                disse quando volta. Não precisa de confirmação: é reversível.
+              - Retomar uma meta pausada: chame resume_goal.
+              - Encerrar uma meta que não faz mais sentido ("cancela", "exclui", "desisti"): chame
+                request_goal_cancellation. Nunca diga que foi cancelada: o sistema pede a confirmação.
+              - Substituir por outra ("troca a corrida por natação"): chame request_goal_replacement. O sistema pede a
+                confirmação; depois a meta nova é detalhada.
+              - Se não der para saber qual das três ele quer, pergunte com opções com letras: A) pausar por um tempo,
+                B) encerrar, C) trocar por outra meta.
+              - Se ele só está pensando em mudar, ajude a entender o motivo e as consequências (o que acontece com o plano,
+                o histórico e o prazo), numa ou duas frases, sem pressionar a continuar uma meta que já não faz sentido.
+                Sempre diga que o histórico fica guardado.
+              - Para ver as metas pausadas, encerradas ou substituídas e o que foi feito nelas, chame goal_history.
             - Registrar progresso ("hoje li 10 páginas", "corri 5 km ontem", "pesei 92 kg"): chame record_progress,
               mesmo que a unidade não seja a do indicador da meta. "ontem", "sábado" → calcule a data a partir de hoje.
               Depois, comemore de forma curta e use os totais que a ferramenta devolveu (ex.: "já são 40 páginas
@@ -130,4 +154,11 @@ internal sealed class GoalsAgent
 }
 
 /// <summary>What the agent answered, and the goal it asked to cancel (if any), which the workflow confirms.</summary>
-internal sealed record AgentReply(string Text, GoalDto? CancellationRequested);
+internal sealed record AgentReply(
+    string Text,
+    GoalDto? CancellationRequested,
+    string? CancellationReason = null,
+    GoalReplacement? ReplacementRequested = null);
+
+/// <summary>The goal the user asked to replace, the new one as understood, and why (when said).</summary>
+internal sealed record GoalReplacement(GoalDto Goal, GoalDraft NewGoal, string? Reason);

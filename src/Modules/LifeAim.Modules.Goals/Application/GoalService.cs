@@ -46,7 +46,45 @@ internal sealed class GoalService(GoalRepository repository, TimeProvider timePr
     }
 
     public Task<bool> CancelAsync(Guid goalId, Guid userId, CancellationToken cancellationToken = default) =>
-        repository.CancelAsync(goalId, userId, timeProvider.GetUtcNow(), cancellationToken);
+        CancelAsync(goalId, userId, null, cancellationToken);
+
+    public Task<bool> CancelAsync(Guid goalId, Guid userId, string? reason, CancellationToken cancellationToken = default) =>
+        repository.CancelAsync(goalId, userId, GoalLifecycle.ValidReason(reason), Now(), cancellationToken);
+
+    public Task<bool> PauseAsync(
+        Guid goalId, Guid userId, DateOnly? resumeOn, string? reason, CancellationToken cancellationToken = default)
+    {
+        var now = Now();
+        var day = GoalLifecycle.ValidResumeOn(resumeOn, DateOnly.FromDateTime(now.UtcDateTime));
+        return repository.PauseAsync(goalId, userId, day, GoalLifecycle.ValidReason(reason), now, cancellationToken);
+    }
+
+    public Task<bool> ResumeAsync(Guid goalId, Guid userId, CancellationToken cancellationToken = default) =>
+        repository.ResumeAsync(goalId, userId, Now(), cancellationToken);
+
+    public async Task<GoalDto?> ReplaceAsync(
+        Guid goalId, CreateGoalRequest replacement, string? reason, CancellationToken cancellationToken = default)
+    {
+        var now = Now();
+        var goal = Goal.Create(
+            replacement.UserId, replacement.Name, replacement.Description, replacement.Indicator, replacement.DueDate, now,
+            replacement.StartValue, replacement.TargetValue, replacement.Unit, replacement.UserPlan);
+
+        return await repository.ReplaceAsync(goalId, replacement.UserId, goal, GoalLifecycle.ValidReason(reason), now, cancellationToken)
+            ? ToDto(goal)
+            : null;
+    }
+
+    public Task<IReadOnlyList<GoalDto>> ListHistoryAsync(Guid userId, CancellationToken cancellationToken = default) =>
+        repository.ListHistoryAsync(userId, cancellationToken);
+
+    public Task<IReadOnlyList<GoalDto>> ListPausesEndingAsync(DateOnly today, CancellationToken cancellationToken = default) =>
+        repository.ListPausesEndingAsync(today, cancellationToken);
+
+    public Task<bool> MarkResumeOfferedAsync(Guid goalId, Guid userId, CancellationToken cancellationToken = default) =>
+        repository.MarkResumeOfferedAsync(goalId, userId, Now(), cancellationToken);
+
+    private DateTimeOffset Now() => Goal.ToDatabasePrecision(timeProvider.GetUtcNow());
 
     public async Task<IReadOnlyList<RoutineDto>?> ReplaceRoutinesAsync(
         Guid goalId,
@@ -76,6 +114,13 @@ internal sealed class GoalService(GoalRepository repository, TimeProvider timePr
     public async Task<IReadOnlyList<RoutineDto>> ListRoutinesAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         var routines = await repository.ListRoutinesByUserAsync(userId, cancellationToken);
+        return routines.Select(ToDto).ToList();
+    }
+
+    public async Task<IReadOnlyList<RoutineDto>> ListGoalRoutinesAsync(
+        Guid goalId, Guid userId, CancellationToken cancellationToken = default)
+    {
+        var routines = await repository.ListRoutinesByUserAsync(userId, cancellationToken, goalId);
         return routines.Select(ToDto).ToList();
     }
 
