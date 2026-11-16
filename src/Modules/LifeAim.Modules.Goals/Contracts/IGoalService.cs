@@ -8,8 +8,14 @@ public interface IGoalService
 {
     Task<GoalDto> CreateAsync(CreateGoalRequest request, CancellationToken cancellationToken = default);
 
-    /// <summary>The user's goals, oldest first.</summary>
+    /// <summary>The user's active goals, oldest first (cancelled ones are kept, but not listed).</summary>
     Task<IReadOnlyList<GoalDto>> ListAsync(Guid userId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Cancels one of the user's active goals: it leaves every list, but its row, plan and history are kept
+    /// (Funcionalidade 6). False when there is no such active goal.
+    /// </summary>
+    Task<bool> CancelAsync(Guid goalId, Guid userId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Replaces the editable fields of one of the user's goals (everything but id, user and creation time).
@@ -27,7 +33,7 @@ public interface IGoalService
         IReadOnlyList<RoutineInput> routines,
         CancellationToken cancellationToken = default);
 
-    /// <summary>The routines of all the user's goals, in the order they were created.</summary>
+    /// <summary>The routines of all the user's active goals, in the order they were created.</summary>
     Task<IReadOnlyList<RoutineDto>> ListRoutinesAsync(Guid userId, CancellationToken cancellationToken = default);
 }
 

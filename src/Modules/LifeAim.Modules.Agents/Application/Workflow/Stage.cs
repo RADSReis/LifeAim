@@ -23,4 +23,10 @@ internal enum Stage
     /// proposes the missing parts and waits for "sim", a correction or "pular".
     /// </summary>
     DetailGoals,
+
+    /// <summary>
+    /// The user asked to cancel a saved goal (through the goals agent): Pippin asked "Tem certeza?" and waits for an
+    /// explicit "sim" (Funcionalidade 1, decision 5). Then the conversation goes back to where it was.
+    /// </summary>
+    ConfirmCancelGoal,
 }

@@ -39,7 +39,7 @@ internal sealed class GoalRepository(NpgsqlDataSource dataSource)
             UPDATE goals.goals
             SET name = $3, description = $4, indicator = $5, due_date = $6,
                 start_value = $7, target_value = $8, unit = $9, user_plan = $10
-            WHERE id = $1 AND user_id = $2
+            WHERE id = $1 AND user_id = $2 AND status = 'active'
             """);
         command.Parameters.Add(new() { Value = goal.Id });
         command.Parameters.Add(new() { Value = goal.UserId });
@@ -55,9 +55,30 @@ internal sealed class GoalRepository(NpgsqlDataSource dataSource)
         return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
     }
 
+    /// <summary>
+    /// Marks an active goal as cancelled; its row, routines and history stay. False when no active goal with
+    /// that id belongs to that user (also when it was already cancelled).
+    /// </summary>
+    public async Task<bool> CancelAsync(Guid id, Guid userId, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        await using var command = dataSource.CreateCommand(
+            """
+            UPDATE goals.goals
+            SET status = 'cancelled', cancelled_at = $3
+            WHERE id = $1 AND user_id = $2 AND status = 'active'
+            """);
+        command.Parameters.Add(new() { Value = id });
+        command.Parameters.Add(new() { Value = userId });
+        command.Parameters.Add(new() { Value = now });
+
+        return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
+    }
+
+    /// <summary>One of the user's active goals, or null.</summary>
     public async Task<Goal?> FindAsync(Guid id, Guid userId, CancellationToken cancellationToken) =>
         (await ListByUserAsync(userId, cancellationToken)).FirstOrDefault(goal => goal.Id == id);
 
+    /// <summary>The user's active goals, oldest first; cancelled ones stay in the table but not here.</summary>
     public async Task<IReadOnlyList<Goal>> ListByUserAsync(Guid userId, CancellationToken cancellationToken)
     {
         await using var command = dataSource.CreateCommand(
@@ -65,7 +86,7 @@ internal sealed class GoalRepository(NpgsqlDataSource dataSource)
             SELECT id, user_id, name, description, indicator, due_date, start_value, target_value, unit, user_plan,
                    created_at
             FROM goals.goals
-            WHERE user_id = $1
+            WHERE user_id = $1 AND status = 'active'
             ORDER BY created_at, id
             """);
         command.Parameters.Add(new() { Value = userId });
@@ -150,11 +171,13 @@ internal sealed class GoalRepository(NpgsqlDataSource dataSource)
     {
         await using var command = dataSource.CreateCommand(
             """
-            SELECT id, goal_id, user_id, activity, frequency, interval, days_of_week, times_per_period, time_of_day,
-                   day_period, amount, unit, duration_minutes, source, starts_on, ends_on, created_at
-            FROM goals.goal_routines
-            WHERE user_id = $1
-            ORDER BY created_at, id
+            SELECT r.id, r.goal_id, r.user_id, r.activity, r.frequency, r.interval, r.days_of_week, r.times_per_period,
+                   r.time_of_day, r.day_period, r.amount, r.unit, r.duration_minutes, r.source, r.starts_on, r.ends_on,
+                   r.created_at
+            FROM goals.goal_routines r
+            JOIN goals.goals g ON g.id = r.goal_id
+            WHERE r.user_id = $1 AND g.status = 'active'
+            ORDER BY r.created_at, r.id
             """);
         command.Parameters.Add(new() { Value = userId });
 

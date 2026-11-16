@@ -124,6 +124,52 @@ public sealed class GoalServiceTests(LifeAimApiFactory factory) : IClassFixture<
         Assert.Empty(await Goals.ListRoutinesAsync(_userId));
     }
 
+    [Fact]
+    public async Task A_cancelled_goal_leaves_the_lists_but_its_row_and_plan_stay()
+    {
+        var reading = await Goals.CreateAsync(new CreateGoalRequest(_userId, "Ler 2 livros"));
+        var gym = await Goals.CreateAsync(new CreateGoalRequest(_userId, "Ir à academia"));
+        await Goals.ReplaceRoutinesAsync(reading.Id, _userId, [new("ler", RoutineFrequency.Daily, RoutineSource.User)]);
+
+        Assert.True(await Goals.CancelAsync(reading.Id, _userId));
+
+        Assert.Equal([gym.Id], (await Goals.ListAsync(_userId)).Select(g => g.Id));
+        Assert.Empty(await Goals.ListRoutinesAsync(_userId));
+
+        // The history is kept (Funcionalidade 6): the row is there, marked as cancelled, with its routine.
+        var dataSource = factory.Services.GetRequiredService<NpgsqlDataSource>();
+        await using var command = dataSource.CreateCommand(
+            """
+            SELECT g.status, g.cancelled_at IS NOT NULL, (SELECT count(*) FROM goals.goal_routines r WHERE r.goal_id = g.id)
+            FROM goals.goals g WHERE g.id = $1
+            """);
+        command.Parameters.Add(new() { Value = reading.Id });
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(("cancelled", true, 1L), (reader.GetString(0), reader.GetBoolean(1), reader.GetInt64(2)));
+    }
+
+    [Fact]
+    public async Task A_cancelled_goal_cannot_be_cancelled_again_nor_changed()
+    {
+        var reading = await Goals.CreateAsync(new CreateGoalRequest(_userId, "Ler 2 livros"));
+        await Goals.CancelAsync(reading.Id, _userId);
+
+        Assert.False(await Goals.CancelAsync(reading.Id, _userId));
+        Assert.Null(await Goals.UpdateAsync(new UpdateGoalRequest(
+            reading.Id, _userId, "Ler 3 livros", null, null, null, null, null, null, null)));
+        Assert.Null(await Goals.ReplaceRoutinesAsync(reading.Id, _userId, [new("ler", RoutineFrequency.Daily, RoutineSource.User)]));
+    }
+
+    [Fact]
+    public async Task Does_not_cancel_someone_elses_goal()
+    {
+        var reading = await Goals.CreateAsync(new CreateGoalRequest(_userId, "Ler 2 livros"));
+
+        Assert.False(await Goals.CancelAsync(reading.Id, Guid.CreateVersion7()));
+        Assert.Single(await Goals.ListAsync(_userId));
+    }
+
     public Task InitializeAsync() => Task.CompletedTask;
 
     public async Task DisposeAsync()

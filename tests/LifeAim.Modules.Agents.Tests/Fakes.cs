@@ -1,5 +1,6 @@
 using LifeAim.Modules.Agents.Application.Workflow;
 using LifeAim.Modules.Goals.Contracts;
+using LifeAim.Modules.Progress.Contracts;
 using Microsoft.Extensions.AI;
 
 namespace LifeAim.Modules.Agents.Tests;
@@ -7,11 +8,24 @@ namespace LifeAim.Modules.Agents.Tests;
 /// <summary>
 /// A pretend AI: answers with fixed texts (the JSON a real model would return), one per call in order
 /// (the last one repeats), and records what it was sent, so the tests run offline, for free and always
-/// the same way.
+/// the same way. An answer can also be a tool call (<see cref="ToolCall"/>), as a real model asks for one.
 /// </summary>
-internal sealed class FakeChatClient(params string[] answers) : IChatClient
+internal sealed class FakeChatClient : IChatClient
 {
+    private readonly ChatMessage[] _answers;
+
+    public FakeChatClient(params string[] answers) =>
+        _answers = answers.Select(answer => new ChatMessage(ChatRole.Assistant, answer)).ToArray();
+
+    public FakeChatClient(params ChatMessage[] answers) => _answers = answers;
+
     public List<IReadOnlyList<ChatMessage>> Calls { get; } = [];
+
+    /// <summary>The model's answer "call this tool with these arguments", which the tool loop executes.</summary>
+    public static ChatMessage ToolCall(string name, Dictionary<string, object?> arguments) =>
+        new(ChatRole.Assistant, [new FunctionCallContent($"call_{Guid.NewGuid():N}", name, arguments)]);
+
+    public static ChatMessage Text(string text) => new(ChatRole.Assistant, text);
 
     public Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
@@ -19,8 +33,8 @@ internal sealed class FakeChatClient(params string[] answers) : IChatClient
         CancellationToken cancellationToken = default)
     {
         Calls.Add(messages.ToList());
-        var answer = answers[Math.Min(Calls.Count - 1, answers.Length - 1)];
-        return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, answer)));
+        var answer = _answers[Math.Min(Calls.Count - 1, _answers.Length - 1)];
+        return Task.FromResult(new ChatResponse(answer));
     }
 
     public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
@@ -94,7 +108,22 @@ internal sealed class FakeGoalService : IGoalService
     }
 
     public Task<IReadOnlyList<GoalDto>> ListAsync(Guid userId, CancellationToken cancellationToken = default) =>
-        Task.FromResult<IReadOnlyList<GoalDto>>(Saved.Where(g => g.UserId == userId).ToList());
+        Task.FromResult<IReadOnlyList<GoalDto>>(
+            Saved.Where(g => g.UserId == userId && !Cancelled.Contains(g.Id)).ToList());
+
+    /// <summary>The goals cancelled: they stay in <see cref="Saved"/>, as in the database, but leave the list.</summary>
+    public List<Guid> Cancelled { get; } = [];
+
+    public Task<bool> CancelAsync(Guid goalId, Guid userId, CancellationToken cancellationToken = default)
+    {
+        var active = Saved.Any(g => g.Id == goalId && g.UserId == userId) && !Cancelled.Contains(goalId);
+        if (active)
+        {
+            Cancelled.Add(goalId);
+        }
+
+        return Task.FromResult(active);
+    }
 
     public List<UpdateGoalRequest> Updated { get; } = [];
 
@@ -149,4 +178,25 @@ internal sealed class FakeGoalService : IGoalService
         Saved.Add(goal);
         return goal;
     }
+}
+
+/// <summary>The Progress module's contract in memory: records what Pippin registered.</summary>
+internal sealed class FakeProgressService : IProgressService
+{
+    public List<ProgressEntryDto> Entries { get; } = [];
+
+    public Task<ProgressEntryDto> RecordAsync(RecordProgressRequest request, CancellationToken cancellationToken = default)
+    {
+        var entry = new ProgressEntryDto(
+            Guid.CreateVersion7(), request.UserId, request.GoalId, request.OccurredOn, request.Amount, request.Unit,
+            request.Note, DateTimeOffset.UtcNow);
+        Entries.Add(entry);
+        return Task.FromResult(entry);
+    }
+
+    public Task<IReadOnlyList<ProgressEntryDto>> ListByGoalAsync(
+        Guid userId, Guid goalId, int limit = 50, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<ProgressEntryDto>>(
+            Entries.Where(e => e.UserId == userId && e.GoalId == goalId)
+                .OrderByDescending(e => e.OccurredOn).ThenByDescending(e => e.CreatedAt).Take(limit).ToList());
 }

@@ -1,4 +1,5 @@
 using LifeAim.BuildingBlocks;
+using LifeAim.Modules.Agents.Application.Agent;
 using LifeAim.Modules.Agents.Application.Nodes;
 using LifeAim.Modules.Agents.Application.Workflow;
 using LifeAim.Modules.Agents.Contracts;
@@ -41,10 +42,14 @@ public static class AgentsModule
         services.AddSingleton<INode, CollectGoalsNode>();
         services.AddSingleton<INode, ConfirmGoalsNode>();
         services.AddSingleton<INode, DetailGoalsNode>();
+        services.AddSingleton<INode, ConfirmCancelGoalNode>();
         services.AddSingleton<GoalDetailing>();
         services.AddSingleton<FallbackRouter>();
         services.AddSingleton<GreetingReply>();
         services.AddSingleton<PathClassifier>();
+
+        // The first agent with tools: conversations about saved goals (consult, change, cancel, record progress).
+        services.AddSingleton<GoalsAgent>();
         services.AddSingleton<IPippin, PippinWorkflow>();
         services.AddSingleton<IConversationReset, ConversationReset>();
 

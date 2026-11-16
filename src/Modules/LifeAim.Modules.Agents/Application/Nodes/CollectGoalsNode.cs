@@ -56,7 +56,8 @@ internal sealed class CollectGoalsNode(IChatClient chatClient, TimeProvider time
         if (answer.Finished)
         {
             return NodeResult.Answer(
-                "Fechado! Suas metas estão guardadas. 💪 Acompanhar o progresso delas é a próxima coisa que eu vou aprender.");
+                "Fechado! Suas metas estão guardadas. 💪 Quando quiser, me conte o que fez (\"hoje li 10 páginas\") " +
+                "ou peça para ver, mudar ou cancelar uma meta.");
         }
 
         if (answer.IsGreeting)
@@ -91,8 +92,8 @@ internal sealed class CollectGoalsNode(IChatClient chatClient, TimeProvider time
             Hoje é {today.ToString("dddd, dd/MM/yyyy", PtBr)}.
             O Pippin perguntou: "{PendingQuestion(context)}". {agreedPeriod}
             Metas que o usuário JÁ salvou: {(context.SavedGoals.Count == 0 ? "nenhuma" : string.Join("; ", context.SavedGoals.Select(g => g.Name)))}.
-            Se a mensagem fala de uma meta já salva (para detalhar, mudar ou comentar), ela NÃO é uma meta nova:
-            não a coloque em goals, e use aboutGoals false.
+            Se a mensagem fala de uma meta já salva (para ver, detalhar, mudar, cancelar, comentar ou contar um progresso
+            como "hoje li 10 páginas"), ela NÃO é uma meta nova: não a coloque em goals, e use aboutGoals false.
 
             O usuário pode responder do jeito que quiser: só o período, só as metas, tudo junto, várias metas numa frase.
             Extraia tudo o que a mensagem trouxer:

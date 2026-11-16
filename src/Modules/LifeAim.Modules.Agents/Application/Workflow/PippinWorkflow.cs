@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using LifeAim.Modules.Agents.Application.Agent;
+using LifeAim.Modules.Agents.Application.Nodes;
 using LifeAim.Modules.Agents.Contracts;
 using LifeAim.Modules.Agents.Infrastructure.Ai;
 using LifeAim.Modules.Goals.Contracts;
@@ -9,7 +11,8 @@ namespace LifeAim.Modules.Agents.Application.Workflow;
 /// <summary>
 /// Pippin's hand-made workflow engine, run once per incoming message:
 /// load the context → run the node of the current stage → if the message was not expected, hand it
-/// to the router → follow the edge (next stage) → save the context and both messages → reply.
+/// to the path classifier (another stage, the goals agent, or the router) → follow the edge (next stage) →
+/// save the context and both messages → reply.
 /// </summary>
 internal sealed class PippinWorkflow : IPippin
 {
@@ -27,6 +30,7 @@ internal sealed class PippinWorkflow : IPippin
     private readonly FallbackRouter _router;
     private readonly GreetingReply _greeting;
     private readonly PathClassifier _classifier;
+    private readonly GoalsAgent _agent;
     private readonly IGoalService _goals;
     private readonly ILogger<PippinWorkflow> _logger;
     private readonly Dictionary<Stage, INode> _nodes;
@@ -37,6 +41,7 @@ internal sealed class PippinWorkflow : IPippin
         FallbackRouter router,
         GreetingReply greeting,
         PathClassifier classifier,
+        GoalsAgent agent,
         IGoalService goals,
         ILogger<PippinWorkflow> logger)
     {
@@ -44,6 +49,7 @@ internal sealed class PippinWorkflow : IPippin
         _router = router;
         _greeting = greeting;
         _classifier = classifier;
+        _agent = agent;
         _goals = goals;
         _logger = logger;
         _nodes = nodes.ToDictionary(node => node.Stage);
@@ -79,6 +85,12 @@ internal sealed class PippinWorkflow : IPippin
             {
                 _logger.LogInformation("Pippin workflow: {From} → {To}", context.Stage, next);
                 context.Stage = next;
+            }
+
+            // Back to something in progress (a cancellation asked in the middle of a detailing): its question again.
+            if (result.Resumes)
+            {
+                reply = WithPendingQuestion(reply, context);
             }
 
             // 5. Save the context and the turn.
@@ -172,8 +184,42 @@ internal sealed class PippinWorkflow : IPippin
             case PathKind.Clarify:
                 return _router.Clarify(decision.Clarification, pending);
 
+            case PathKind.GoalTalk:
+                return await TalkAboutGoalsAsync(context, cancellationToken);
+
             default:
                 return _router.Route(pending);
         }
+    }
+
+    // The goals agent answers (with its tools). The stage does not change, so whatever was in progress is resumed;
+    // only a cancellation moves on, to the explicit confirmation, which the code asks.
+    private async Task<NodeResult> TalkAboutGoalsAsync(ConversationContext context, CancellationToken cancellationToken)
+    {
+        var answer = await _agent.ReplyAsync(context, cancellationToken);
+
+        if (answer.CancellationRequested is { } goal)
+        {
+            context.Draft = (context.Draft ?? GoalsDraft.Empty(null)) with
+            {
+                CancelGoalId = goal.Id,
+                ReturnStage = context.Stage,
+            };
+            return NodeResult.Answer(ConfirmCancelGoalNode.Question(goal.Name), Stage.ConfirmCancelGoal);
+        }
+
+        var reply = string.IsNullOrWhiteSpace(answer.Text) ? "Acho que não entendi direito. 🤔" : answer.Text;
+        return NodeResult.Answer(WithPendingQuestion(reply, context));
+    }
+
+    /// <summary>
+    /// Ends the reply with the pending question of the current stage ("Voltando ao que eu tinha perguntado: …").
+    /// Not at CollectGoals: between tasks its question is only "quer adicionar mais metas?", which would close every
+    /// answer about a goal with the same invitation.
+    /// </summary>
+    private string WithPendingQuestion(string reply, ConversationContext context)
+    {
+        var pending = context.Stage == Stage.CollectGoals ? null : _nodes[context.Stage].PendingQuestion(context);
+        return pending is null ? reply : $"{reply}\n\n{FallbackRouter.BackToQuestion}{pending}";
     }
 }

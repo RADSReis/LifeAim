@@ -6,8 +6,9 @@ namespace LifeAim.Modules.Agents.Application.Workflow;
 /// <summary>
 /// When the node of the current stage did not understand the message, one AI call reads the context (stage,
 /// pending question, recent messages, saved goals) and picks the best way on: another stage, a clarification
-/// of the current question, or "out of scope". It only chooses; the workflow checks the choice against
-/// <see cref="AllowedPaths"/> and applies it. A classifier, not an agent: one call, no tools, no loop.
+/// of the current question, a conversation about the saved goals (the goals agent), or "out of scope". It only
+/// chooses; the workflow checks the choice against <see cref="AllowedPaths"/> and applies it. A classifier, not an
+/// agent: one call, no tools, no loop. The agent with tools is the "goal_talk" route.
 /// </summary>
 internal sealed class PathClassifier(IChatClient chatClient)
 {
@@ -20,7 +21,9 @@ internal sealed class PathClassifier(IChatClient chatClient)
         {
             [Stage.CollectGoals] = new Dictionary<Stage, string>
             {
-                [Stage.DetailGoals] = "conversar sobre uma meta JÁ SALVA para detalhá-la (informe goalNumber)",
+                [Stage.DetailGoals] =
+                    "aprofundar uma meta JÁ SALVA respondendo às perguntas do Pippin para montar o plano dela " +
+                    "(\"vamos detalhar a meta de leitura\") (informe goalNumber)",
             },
             [Stage.DetailGoals] = new Dictionary<Stage, string>
             {
@@ -61,6 +64,9 @@ internal sealed class PathClassifier(IChatClient chatClient)
             case "clarify":
                 return new PathDecision(PathKind.Clarify, null, null, Blank(answer.Clarification), reason);
 
+            case "goal_talk" when context.SavedGoals.Count > 0:
+                return new PathDecision(PathKind.GoalTalk, null, null, null, reason);
+
             default:
                 return PathDecision.OutOfScope(reason);
         }
@@ -81,6 +87,16 @@ internal sealed class PathClassifier(IChatClient chatClient)
             ? "nenhuma"
             : string.Join("\n", context.SavedGoals.Select((g, i) => $"{i + 1}. {g.Name}"));
 
+        // Only with saved goals: there is nothing to consult, change, cancel or report progress on before that.
+        var goalTalk = context.SavedGoals.Count == 0
+            ? ""
+            : """
+              - "goal_talk": a mensagem é sobre as metas JÁ SALVAS: ver ou consultar informações ("me mostra a meta do
+                peso", "quais são minhas metas?", "como estou na leitura?"), alterar (nome, quantidade, prazo, valores,
+                dias ou horários do plano), cancelar ou excluir uma meta, ou registrar progresso ("hoje li 10 páginas",
+                "corri 5 km ontem", "pesei 92 kg"). Prefira goal_talk a goto para esses pedidos.
+              """;
+
         return $"""
             Você ajuda o Pippin, um assistente que conversa em português para cadastrar e acompanhar as metas de vida
             do usuário. A etapa atual da conversa não entendeu a última mensagem. Decida o melhor caminho a seguir.
@@ -98,6 +114,7 @@ internal sealed class PathClassifier(IChatClient chatClient)
             {pathList}
             - "clarify": a mensagem tenta responder a pergunta da etapa atual, mas ficou confusa ou incompleta.
               Escreva em clarification UMA frase curta, em português, dizendo o que o Pippin precisa (sem repetir a pergunta).
+            {goalTalk}
             - "out_of_scope": um pedido ou assunto sem relação com as metas do usuário (piada, previsão do tempo,
               receita, perguntas gerais).
 
@@ -130,6 +147,10 @@ internal enum PathKind
 {
     Goto,
     Clarify,
+
+    /// <summary>A conversation about the saved goals: the goals agent (with tools) answers it.</summary>
+    GoalTalk,
+
     OutOfScope,
 }
 

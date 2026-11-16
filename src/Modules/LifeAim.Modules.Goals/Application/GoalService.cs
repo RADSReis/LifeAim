@@ -45,6 +45,9 @@ internal sealed class GoalService(GoalRepository repository, TimeProvider timePr
         return await repository.UpdateAsync(changed, cancellationToken) ? ToDto(changed) : null;
     }
 
+    public Task<bool> CancelAsync(Guid goalId, Guid userId, CancellationToken cancellationToken = default) =>
+        repository.CancelAsync(goalId, userId, timeProvider.GetUtcNow(), cancellationToken);
+
     public async Task<IReadOnlyList<RoutineDto>?> ReplaceRoutinesAsync(
         Guid goalId,
         Guid userId,

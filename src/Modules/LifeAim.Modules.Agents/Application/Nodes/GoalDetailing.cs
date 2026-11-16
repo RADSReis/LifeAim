@@ -60,16 +60,10 @@ internal sealed class GoalDetailing(IChatClient chatClient, IGoalService goals, 
 
         if (plan is { Routines.Count: > 0 })
         {
-            // A routine runs from today until the goal's due date, unless the user said otherwise.
-            var today = GoalHorizon.Today(timeProvider);
-            var routines = plan.Routines
-                .Select(r => r with { StartsOn = r.StartsOn ?? today, EndsOn = r.EndsOn ?? Later(goal.DueDate, today) })
-                .ToList();
+            var routines = GoalPlan.WithDates(plan.Routines, goal.DueDate, GoalHorizon.Today(timeProvider));
             await goals.ReplaceRoutinesAsync(goalId, userId, routines, cancellationToken);
         }
     }
-
-    private static DateOnly? Later(DateOnly? due, DateOnly today) => due is { } date && date >= today ? date : null;
 
     /// <summary>The fallback when the AI fails: still one question, still offering a proposal.</summary>
     public static string DefaultQuestion(GoalDraft goal) =>

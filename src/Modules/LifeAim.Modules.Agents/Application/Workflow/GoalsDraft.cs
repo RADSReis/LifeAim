@@ -16,6 +16,11 @@ namespace LifeAim.Modules.Agents.Application.Workflow;
 /// <param name="Assumptions">What Pippin assumed in the plan it shows ("10 páginas por dia").</param>
 /// <param name="Question">While detailing: the one question Pippin asked about the goal in focus.</param>
 /// <param name="Plan">While detailing: the plan Pippin understood (or proposed), waiting for confirmation.</param>
+/// <param name="CancelGoalId">While confirming a cancellation (Stage.ConfirmCancelGoal): the saved goal to cancel.</param>
+/// <param name="ReturnStage">
+/// Where the conversation was when the cancellation was asked: it goes back there afterwards, with the rest of
+/// this draft (a detailing in progress) untouched.
+/// </param>
 internal sealed record GoalsDraft(
     DateOnly? Horizon,
     IReadOnlyList<GoalDraft> Goals,
@@ -23,7 +28,9 @@ internal sealed record GoalsDraft(
     IReadOnlyList<Guid>? DetailQueue = null,
     IReadOnlyList<string>? Assumptions = null,
     string? Question = null,
-    PlanDraft? Plan = null)
+    PlanDraft? Plan = null,
+    Guid? CancelGoalId = null,
+    Stage? ReturnStage = null)
 {
     public static GoalsDraft Empty(DateOnly? horizon) => new(horizon, [], []);
 }

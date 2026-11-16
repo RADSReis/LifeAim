@@ -13,6 +13,10 @@ internal sealed class GreetingReply
     /// <summary>UX item 11: show at most 10 goals; with more, the first 10 and "...".</summary>
     public const int MaxListedGoals = 10;
 
+    public const string GoalsInvitation =
+        "Veio me trazer novidades sobre suas metas? Sobre qual delas vamos falar hoje? " +
+        "Se quiser, também dá para cadastrar uma meta nova.";
+
     public string Reply(ConversationContext context, string? pendingQuestion)
     {
         var text = new StringBuilder(context.UserName is null ? "Oi! 😊" : $"Opa! Olá, {context.UserName}! 😊");
@@ -33,17 +37,18 @@ internal sealed class GreetingReply
             }
         }
 
-        // Until Pippin can talk about a saved goal (next step), it ends with what it can do now: the pending question.
+        // Between tasks, the invitation of UX item 11: talk about one of them (the goals agent takes the answer).
+        if (listsGoals)
+        {
+            return text.Append("\n\n").Append(GoalsInvitation).ToString();
+        }
+
         if (pendingQuestion is null)
         {
             return text.ToString();
         }
 
-        if (listsGoals)
-        {
-            text.Append("\n\n").Append(pendingQuestion);
-        }
-        else if (pendingQuestion.Contains('\n'))
+        if (pendingQuestion.Contains('\n'))
         {
             text.Append(" Voltando de onde paramos:\n\n").Append(pendingQuestion);
         }

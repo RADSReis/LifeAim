@@ -104,6 +104,13 @@ internal static class GoalPlan
             DurationMinutes: routine.DurationMinutes is >= 1 ? routine.DurationMinutes : null);
     }
 
+    /// <summary>A routine runs from today until the goal's due date, unless the user said otherwise.</summary>
+    public static IReadOnlyList<RoutineInput> WithDates(IEnumerable<RoutineInput> routines, DateOnly? dueDate, DateOnly today)
+    {
+        DateOnly? end = dueDate is { } date && date >= today ? date : null;
+        return routines.Select(r => r with { StartsOn = r.StartsOn ?? today, EndsOn = r.EndsOn ?? end }).ToList();
+    }
+
     /// <summary>A routine back in the shape the AI reads, so a correction starts from what the user saw.</summary>
     public static ExtractedRoutine ToExtracted(RoutineInput routine) =>
         new(

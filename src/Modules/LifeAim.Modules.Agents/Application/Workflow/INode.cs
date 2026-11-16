@@ -29,14 +29,22 @@ internal interface INode
 /// <summary>What a node did with the message.</summary>
 internal sealed record NodeResult
 {
-    private NodeResult(bool expected, string? reply, Stage? nextStage, bool isGreeting = false, string? note = null)
+    private NodeResult(
+        bool expected, string? reply, Stage? nextStage, bool isGreeting = false, string? note = null, bool resumes = false)
     {
         Expected = expected;
         Reply = reply;
         NextStage = nextStage;
         IsGreeting = isGreeting;
         Note = note;
+        Resumes = resumes;
     }
+
+    /// <summary>
+    /// The conversation goes back to <see cref="NextStage"/>, where something was in progress: the workflow ends
+    /// the reply with that stage's pending question ("Voltando ao que eu tinha perguntado: …").
+    /// </summary>
+    public bool Resumes { get; }
 
     /// <summary>
     /// With <see cref="Expected"/> false: something the node already did before finding out the message was not
@@ -56,6 +64,9 @@ internal sealed record NodeResult
     public Stage? NextStage { get; }
 
     public static NodeResult Answer(string reply, Stage? nextStage = null) => new(true, reply, nextStage);
+
+    /// <summary>Answers and goes back to <paramref name="stage"/>, repeating its pending question.</summary>
+    public static NodeResult Resume(string reply, Stage stage) => new(true, reply, stage, resumes: true);
 
     public static NodeResult NotExpected { get; } = new(false, null, null);
 

@@ -1,3 +1,4 @@
+using LifeAim.Modules.Agents.Application.Agent;
 using LifeAim.Modules.Agents.Application.Nodes;
 using LifeAim.Modules.Agents.Application.Workflow;
 using LifeAim.Modules.Agents.Contracts;
@@ -156,7 +157,7 @@ public class PippinWorkflowTests
     }
 
     [Fact]
-    public async Task A_greeting_lists_the_saved_goals_and_asks_the_pending_question()
+    public async Task A_greeting_lists_the_saved_goals_and_invites_to_talk_about_one()
     {
         AtStage(Stage.CollectGoals, GoalsDraft.Empty(new DateOnly(2026, 12, 31)));
         var goals = new FakeGoalService();
@@ -166,10 +167,10 @@ public class PippinWorkflowTests
 
         var reply = await workflow.ReplyAsync(Message("olá"));
 
-        // UX item 11: greet back and list the goals; with goals saved, the question is about adding more.
+        // UX item 11: greet back, list the goals and ask which one to talk about (the goals agent answers that).
         Assert.Equal(
             "Opa! Olá, Rafael! 😊\n\n**Suas metas:**\n- Emagrecer até 90 kg\n- Ler 2 livros\n\n" +
-            "Quer adicionar mais alguma meta até 31/12/2026?",
+            GreetingReply.GoalsInvitation,
             reply);
         Assert.DoesNotContain(FallbackRouter.BackToQuestion, reply);
         Assert.Equal(Stage.CollectGoals, _store.States[UserId].Stage);
@@ -836,6 +837,192 @@ public class PippinWorkflowTests
         Assert.EndsWith(FallbackRouter.BackToQuestion + "Quais metas você quer alcançar até 31/12/2026?", reply);
     }
 
+    // ---------- The goals agent: consult, change, cancel and record progress (tools + loop) ----------
+
+    // What CollectGoals' AI returns for a message about a saved goal: not a new goal, not about the period.
+    private const string AboutASavedGoal =
+        """{ "aboutGoals": false, "isGreeting": false, "goals": [], "doubts": [], "finished": false }""";
+
+    private const string GoalTalk = """{ "route": "goal_talk", "reason": "progresso de uma meta salva" }""";
+
+    [Fact]
+    public async Task Reported_progress_goes_through_the_agent_tool_and_is_recorded_for_the_right_goal()
+    {
+        AtStage(Stage.CollectGoals, GoalsDraft.Empty(new DateOnly(2026, 12, 31)));
+        var goals = new FakeGoalService();
+        goals.Add(UserId, "Emagrecer até 90 kg", November.GetUtcNow().AddDays(-2));
+        var reading = goals.Add(UserId, "Ler 2 livros", November.GetUtcNow().AddDays(-1));
+        var progress = new FakeProgressService();
+        var ai = new FakeChatClient(
+            FakeChatClient.Text(AboutASavedGoal),
+            FakeChatClient.Text(GoalTalk),
+            // The model asks for the tool; the loop runs it and calls the model again with the result.
+            FakeChatClient.ToolCall("record_progress", new()
+            {
+                ["goalNumber"] = 2, ["note"] = "leu 10 páginas", ["amount"] = 10, ["unit"] = "páginas",
+            }),
+            FakeChatClient.Text("Boa! 📚 Registrei 10 páginas em **Ler 2 livros**."));
+
+        var reply = await CreateWorkflow(ai, goals, progress).ReplyAsync(Message("hoje li 10 páginas"));
+
+        var entry = Assert.Single(progress.Entries);
+        Assert.Equal(reading.Id, entry.GoalId);
+        Assert.Equal(UserId, entry.UserId);
+        Assert.Equal(10m, entry.Amount);
+        Assert.Equal("páginas", entry.Unit);
+        Assert.Equal(new DateOnly(2026, 11, 13), entry.OccurredOn); // "hoje", in the user's time zone
+
+        // Between tasks the agent's reply stands alone: no "quer adicionar mais metas?" after it.
+        Assert.Equal("Boa! 📚 Registrei 10 páginas em **Ler 2 livros**.", reply);
+        Assert.Equal(Stage.CollectGoals, _store.States[UserId].Stage);
+
+        // The second call to the model carried the tool's result, with the totals it can celebrate.
+        var result = ai.Calls[3].SelectMany(m => m.Contents).OfType<FunctionResultContent>().Single();
+        Assert.Contains("Total em páginas: 10", result.Result?.ToString());
+    }
+
+    [Fact]
+    public async Task A_tool_called_with_a_goal_number_that_does_not_exist_changes_nothing()
+    {
+        AtStage(Stage.CollectGoals, GoalsDraft.Empty(new DateOnly(2026, 12, 31)));
+        var goals = new FakeGoalService();
+        goals.Add(UserId, "Ler 2 livros", November.GetUtcNow());
+        var progress = new FakeProgressService();
+        var ai = new FakeChatClient(
+            FakeChatClient.Text(AboutASavedGoal),
+            FakeChatClient.Text(GoalTalk),
+            FakeChatClient.ToolCall("record_progress", new() { ["goalNumber"] = 7, ["note"] = "correu 5 km" }),
+            FakeChatClient.Text("Não achei essa meta."));
+
+        await CreateWorkflow(ai, goals, progress).ReplyAsync(Message("corri 5 km"));
+
+        Assert.Empty(progress.Entries);
+        var result = ai.Calls[3].SelectMany(m => m.Contents).OfType<FunctionResultContent>().Single();
+        Assert.StartsWith("Erro:", result.Result?.ToString());
+    }
+
+    [Fact]
+    public async Task Changing_a_due_date_updates_only_that_field()
+    {
+        AtStage(Stage.CollectGoals, GoalsDraft.Empty(new DateOnly(2026, 12, 31)));
+        var goals = new FakeGoalService();
+        var weight = goals.Add(UserId, "Emagrecer até 90 kg", November.GetUtcNow());
+        var ai = new FakeChatClient(
+            FakeChatClient.Text(AboutASavedGoal),
+            FakeChatClient.Text(GoalTalk),
+            FakeChatClient.ToolCall("update_goal", new() { ["goalNumber"] = 1, ["dueDate"] = "2027-03-31" }),
+            FakeChatClient.Text("Pronto, o prazo agora é 31/03/2027."));
+
+        await CreateWorkflow(ai, goals).ReplyAsync(Message("muda o prazo do peso para março"));
+
+        var update = Assert.Single(goals.Updated);
+        Assert.Equal(weight.Id, update.GoalId);
+        Assert.Equal(new DateOnly(2027, 3, 31), update.DueDate);
+        Assert.Equal("Emagrecer até 90 kg", update.Name); // the rest stays as it was
+    }
+
+    [Fact]
+    public async Task Asking_to_cancel_does_not_cancel_it_asks_for_an_explicit_sim_first()
+    {
+        AtStage(Stage.CollectGoals, GoalsDraft.Empty(new DateOnly(2026, 12, 31)));
+        var goals = new FakeGoalService();
+        var reading = goals.Add(UserId, "Ler 2 livros", November.GetUtcNow());
+        var ai = new FakeChatClient(
+            FakeChatClient.Text(AboutASavedGoal),
+            FakeChatClient.Text(GoalTalk),
+            FakeChatClient.ToolCall("request_goal_cancellation", new() { ["goalNumber"] = 1 }),
+            FakeChatClient.Text("Vou pedir a confirmação."),
+            FakeChatClient.Text("""{ "decision": "confirm" }"""));
+        var workflow = CreateWorkflow(ai, goals);
+
+        var question = await workflow.ReplyAsync(Message("a meta de leitura tem que ser cancelada"));
+
+        Assert.Equal(ConfirmCancelGoalNode.Question("Ler 2 livros"), question); // the code asks, not the model
+        Assert.Empty(goals.Cancelled);
+        Assert.Equal(Stage.ConfirmCancelGoal, _store.States[UserId].Stage);
+
+        var reply = await workflow.ReplyAsync(Message("sim"));
+
+        Assert.Equal([reading.Id], goals.Cancelled);
+        Assert.Contains("cancelei a meta **Ler 2 livros**", reply);
+        Assert.Equal(Stage.CollectGoals, _store.States[UserId].Stage);
+        Assert.Null(_store.States[UserId].Draft!.CancelGoalId);
+    }
+
+    [Fact]
+    public async Task Saying_no_to_the_cancellation_keeps_the_goal()
+    {
+        var goals = new FakeGoalService();
+        var reading = goals.Add(UserId, "Ler 2 livros", November.GetUtcNow());
+        AtStage(Stage.ConfirmCancelGoal, GoalsDraft.Empty(new DateOnly(2026, 12, 31)) with
+        {
+            CancelGoalId = reading.Id, ReturnStage = Stage.CollectGoals,
+        });
+
+        var reply = await CreateWorkflow(new FakeChatClient("""{ "decision": "keep" }"""), goals).ReplyAsync(Message("não"));
+
+        Assert.Empty(goals.Cancelled);
+        Assert.Contains("continua de pé", reply);
+        Assert.Equal(Stage.CollectGoals, _store.States[UserId].Stage);
+    }
+
+    [Fact]
+    public async Task Cancelling_another_goal_while_detailing_resumes_the_detailing_without_it()
+    {
+        var goals = new FakeGoalService();
+        var reading = goals.Add(UserId, "Ler 2 livros", November.GetUtcNow().AddDays(-1));
+        var weight = goals.Add(UserId, "Emagrecer até 90 kg", November.GetUtcNow());
+        AtDetailing(reading, weight);
+        var ai = new FakeChatClient(
+            FakeChatClient.Text(DetailAnswer("other")),
+            FakeChatClient.Text(GoalTalk),
+            FakeChatClient.ToolCall("request_goal_cancellation", new() { ["goalNumber"] = 2 }),
+            FakeChatClient.Text("ok"),
+            FakeChatClient.Text("""{ "decision": "confirm" }"""));
+        var workflow = CreateWorkflow(ai, goals);
+
+        await workflow.ReplyAsync(Message("na verdade quero cancelar a meta do peso"));
+        var reply = await workflow.ReplyAsync(Message("sim, pode cancelar"));
+
+        Assert.Equal([weight.Id], goals.Cancelled);
+        Assert.Equal(Stage.DetailGoals, _store.States[UserId].Stage);
+        Assert.Equal([reading.Id], _store.States[UserId].Draft!.DetailQueue); // the weight left the queue
+        Assert.EndsWith(FallbackRouter.BackToQuestion + ReadingQuestionText, reply); // back to the reading question
+    }
+
+    [Fact]
+    public async Task An_unclear_answer_to_the_cancellation_does_not_cancel()
+    {
+        var goals = new FakeGoalService();
+        var reading = goals.Add(UserId, "Ler 2 livros", November.GetUtcNow());
+        AtStage(Stage.ConfirmCancelGoal, GoalsDraft.Empty(new DateOnly(2026, 12, 31)) with
+        {
+            CancelGoalId = reading.Id, ReturnStage = Stage.CollectGoals,
+        });
+        var ai = new FakeChatClient(
+            """{ "decision": "other" }""",
+            """{ "aboutGoals": false, "isGreeting": false, "goals": [], "doubts": [], "finished": false }""",
+            """{ "route": "out_of_scope", "reason": "outro assunto" }""");
+
+        var reply = await CreateWorkflow(ai, goals).ReplyAsync(Message("qual a previsão do tempo?"));
+
+        Assert.Empty(goals.Cancelled);
+        Assert.StartsWith("Não cancelei a meta **Ler 2 livros**.", reply);
+        Assert.Equal(Stage.CollectGoals, _store.States[UserId].Stage);
+    }
+
+    [Fact]
+    public async Task Goal_talk_without_saved_goals_is_out_of_scope()
+    {
+        AtStage(Stage.CollectGoals, GoalsDraft.Empty(new DateOnly(2026, 12, 31)));
+        var ai = new FakeChatClient(AboutASavedGoal, GoalTalk);
+
+        var reply = await CreateWorkflow(ai).ReplyAsync(Message("hoje li 10 páginas"));
+
+        Assert.EndsWith(FallbackRouter.BackToQuestion + "Quais metas você quer alcançar até 31/12/2026?", reply);
+        Assert.Equal(2, ai.Calls.Count); // the agent was never called
+    }
+
     // The conversation deepening the first goal of the queue: waiting for the answer to the one question,
     // or, with a plan, waiting for "sim" to it.
     private void AtDetailing(GoalDto first, GoalDto? second = null, bool plan = false, GoalDraft? goal = null) =>
@@ -861,9 +1048,10 @@ public class PippinWorkflowTests
     private void AtStage(Stage stage, GoalsDraft? draft = null) =>
         _store.States[UserId] = new ConversationState(stage, "Rafael", draft);
 
-    private PippinWorkflow CreateWorkflow(IChatClient ai, FakeGoalService? goals = null)
+    private PippinWorkflow CreateWorkflow(IChatClient ai, FakeGoalService? goals = null, FakeProgressService? progress = null)
     {
         goals ??= new FakeGoalService();
+        progress ??= new FakeProgressService();
         var detailing = new GoalDetailing(ai, goals, November);
         return new(
             _store,
@@ -873,10 +1061,12 @@ public class PippinWorkflowTests
                 new CollectGoalsNode(ai, November),
                 new ConfirmGoalsNode(ai, goals, detailing, November),
                 new DetailGoalsNode(ai, detailing, November),
+                new ConfirmCancelGoalNode(ai, goals, detailing),
             ],
             new FallbackRouter(),
             new GreetingReply(),
             new PathClassifier(ai),
+            new GoalsAgent(ai, goals, progress, November, NullLoggerFactory.Instance),
             goals,
             NullLogger<PippinWorkflow>.Instance);
     }

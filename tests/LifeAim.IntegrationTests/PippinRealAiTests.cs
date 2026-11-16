@@ -1,6 +1,7 @@
 using System.Text.Json;
 using LifeAim.Modules.Agents.Contracts;
 using LifeAim.Modules.Goals.Contracts;
+using LifeAim.Modules.Progress.Contracts;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
@@ -185,7 +186,8 @@ public sealed class PippinRealAiTests(RealAiApiFactory factory, ITestOutputHelpe
 
         Assert.Equal(
             "Opa! Olá, Rafael! 😊\n\n**Suas metas:**\n- Emagrecer até 90 kg\n- Ler 2 livros\n\n" +
-            "Quer adicionar mais alguma meta até 31/12/2026?",
+            "Veio me trazer novidades sobre suas metas? Sobre qual delas vamos falar hoje? " +
+            "Se quiser, também dá para cadastrar uma meta nova.",
             reply);
     }
 
@@ -351,6 +353,91 @@ public sealed class PippinRealAiTests(RealAiApiFactory factory, ITestOutputHelpe
         Assert.StartsWith("Claro!", reply);
     }
 
+    // ---------- The goals agent (tools + loop) with the real model ----------
+
+    // Two saved goals with their values, between tasks (CollectGoals): where most of these talks will happen.
+    private async Task<(Guid Weight, Guid Books)> SeedTwoPlannedGoalsAsync()
+    {
+        await SeedAsync("CollectGoals", PeriodOnly);
+        var weight = await SeedGoalAsync("Emagrecer até 90 kg", RealAiApiFactory.Now.AddMinutes(-2));
+        var books = await SeedGoalAsync("Ler 2 livros", RealAiApiFactory.Now.AddMinutes(-1));
+        var goals = factory.Services.GetRequiredService<IGoalService>();
+        await goals.UpdateAsync(new UpdateGoalRequest(
+            weight, _userId, "Emagrecer até 90 kg", null, "peso corporal", new DateOnly(2026, 12, 25), 94m, 90m, "kg", null));
+        await goals.UpdateAsync(new UpdateGoalRequest(
+            books, _userId, "Ler 2 livros", null, "livros terminados", new DateOnly(2026, 12, 31), null, 2m, "livros", null));
+        return (weight, books);
+    }
+
+    [RealAiFact]
+    public async Task Reporting_progress_records_it_for_the_right_goal_even_in_another_unit()
+    {
+        var (_, books) = await SeedTwoPlannedGoalsAsync();
+
+        await Send("hoje li 12 páginas");
+
+        var entry = Assert.Single(await Progress.ListByGoalAsync(_userId, books));
+        Assert.Equal(12m, entry.Amount);
+        Assert.Contains("pág", entry.Unit);
+        Assert.Equal(new DateOnly(2026, 11, 14), entry.OccurredOn);
+        Assert.Equal("CollectGoals", (await StateAsync()).Stage);
+    }
+
+    [RealAiFact]
+    public async Task Progress_of_yesterday_gets_yesterdays_date()
+    {
+        var (weight, _) = await SeedTwoPlannedGoalsAsync();
+
+        await Send("ontem me pesei e deu 93 kg");
+
+        var entry = Assert.Single(await Progress.ListByGoalAsync(_userId, weight));
+        Assert.Equal((93m, new DateOnly(2026, 11, 13)), (entry.Amount!.Value, entry.OccurredOn));
+    }
+
+    [RealAiFact]
+    public async Task Consulting_a_goal_shows_its_information()
+    {
+        await SeedTwoPlannedGoalsAsync();
+
+        var reply = await Send("me mostra a meta do peso");
+
+        Assert.Contains("90", reply);
+        Assert.Contains("94", reply);
+        Assert.Contains("25/12", reply);
+    }
+
+    [RealAiFact]
+    public async Task Changing_the_due_date_by_conversation_updates_the_goal()
+    {
+        var (weight, _) = await SeedTwoPlannedGoalsAsync();
+
+        await Send("muda o prazo da meta de peso para 31 de março de 2027");
+
+        var goal = (await GoalsAsync()).Single(g => g.Id == weight);
+        Assert.Equal(new DateOnly(2027, 3, 31), goal.DueDate);
+        Assert.Equal(90m, goal.TargetValue); // the rest stays
+    }
+
+    [RealAiFact]
+    public async Task Cancelling_asks_for_confirmation_and_only_sim_cancels()
+    {
+        var (weight, books) = await SeedTwoPlannedGoalsAsync();
+
+        var question = await Send("a meta sobre leitura de livros tem que ser cancelada");
+
+        Assert.Contains("Tem certeza que a meta **Ler 2 livros** deve ser cancelada?", question);
+        Assert.Equal("ConfirmCancelGoal", (await StateAsync()).Stage);
+        Assert.Equal(2, (await GoalsAsync()).Count); // nothing cancelled before the "sim"
+
+        await Send("sim");
+
+        Assert.Equal([weight], (await GoalsAsync()).Select(g => g.Id));
+        Assert.Equal("CollectGoals", (await StateAsync()).Stage);
+        Assert.DoesNotContain(books, (await GoalsAsync()).Select(g => g.Id));
+    }
+
+    private IProgressService Progress => factory.Services.GetRequiredService<IProgressService>();
+
     private const string ReadingGoal =
         """{ "name": "Ler 2 livros", "indicator": "livros terminados", "targetValue": 2, "unit": "livros", "dueDate": "2026-12-31" }""";
 
@@ -495,8 +582,16 @@ public sealed class PippinRealAiTests(RealAiApiFactory factory, ITestOutputHelpe
     public async Task DisposeAsync()
     {
         await factory.Services.GetRequiredService<IConversationReset>().ResetAsync(_userId);
-        await using var command = Db.CreateCommand("DELETE FROM goals.goals WHERE user_id = $1");
-        command.Parameters.Add(new() { Value = _userId });
-        await command.ExecuteNonQueryAsync();
+        // One command per statement: PostgreSQL does not take several statements with $1 parameters in one command.
+        foreach (var sql in new[]
+                 {
+                     "DELETE FROM goals.goals WHERE user_id = $1",
+                     "DELETE FROM progress.progress_entries WHERE user_id = $1",
+                 })
+        {
+            await using var command = Db.CreateCommand(sql);
+            command.Parameters.Add(new() { Value = _userId });
+            await command.ExecuteNonQueryAsync();
+        }
     }
 }
