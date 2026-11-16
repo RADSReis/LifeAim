@@ -3,6 +3,7 @@ using LifeAim.Modules.Agents.Contracts;
 using LifeAim.Modules.Goals.Contracts;
 using LifeAim.Modules.Planning.Contracts;
 using LifeAim.Modules.Progress.Contracts;
+using LifeAim.Modules.Reporting.Contracts;
 using Microsoft.Extensions.AI;
 
 namespace LifeAim.Modules.Agents.Tests;
@@ -222,6 +223,11 @@ internal sealed class FakeProgressService : IProgressService
         Task.FromResult<IReadOnlyList<ProgressEntryDto>>(
             Entries.Where(e => e.UserId == userId && e.GoalId == goalId)
                 .OrderByDescending(e => e.OccurredOn).ThenByDescending(e => e.CreatedAt).Take(limit).ToList());
+
+    public Task<IReadOnlyList<ProgressEntryDto>> ListAsync(
+        Guid userId, DateOnly from, DateOnly to, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<ProgressEntryDto>>(
+            Entries.Where(e => e.UserId == userId && e.OccurredOn >= from && e.OccurredOn <= to).OrderBy(e => e.OccurredOn).ToList());
 }
 
 /// <summary>The Planning module's contract in memory, with the same status rules as the database.</summary>
@@ -392,5 +398,67 @@ internal sealed class FakeCheckInService(TimeProvider? time = null) : ICheckInSe
         }
 
         return count;
+    }
+}
+
+/// <summary>The Reporting module's contract in memory: a fixed report, and the summaries recorded (one per month).</summary>
+internal sealed class FakeReportingService : IReportingService
+{
+    public MonthlyReportDto? Report { get; set; }
+
+    public List<SummaryDto> Summaries { get; } = [];
+
+    public List<DateOnly> Built { get; } = [];
+
+    public Task<MonthlyReportDto> BuildMonthlyAsync(Guid userId, DateOnly month, CancellationToken cancellationToken = default)
+    {
+        Built.Add(month);
+        return Task.FromResult(Report ?? throw new InvalidOperationException("The test set no report."));
+    }
+
+    public Task<SummaryDto?> GetForMonthAsync(Guid userId, DateOnly month, CancellationToken cancellationToken = default) =>
+        Task.FromResult(Summaries.FirstOrDefault(s => s.UserId == userId && s.Month == new DateOnly(month.Year, month.Month, 1)));
+
+    public Task<SummaryDto?> FindAsync(Guid summaryId, Guid userId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(Summaries.FirstOrDefault(s => s.Id == summaryId && s.UserId == userId));
+
+    public async Task<bool> RecordSentAsync(RecordSummaryRequest request, CancellationToken cancellationToken = default)
+    {
+        if (await GetForMonthAsync(request.UserId, request.Month, cancellationToken) is not null)
+        {
+            return false;
+        }
+
+        var insight = request.InsightTeaser is null || request.Insight is null ? null : request.Insight;
+        Summaries.Add(new SummaryDto(
+            request.SummaryId, request.UserId, new DateOnly(request.Month.Year, request.Month.Month, 1), SummaryStatus.Sent,
+            request.IncludesQuarter, request.Message, insight is null ? null : request.InsightTeaser, insight,
+            insight is null ? InsightStatus.None : InsightStatus.Offered, DateTimeOffset.UtcNow));
+        return true;
+    }
+
+    public async Task<bool> RecordSkippedAsync(Guid userId, DateOnly month, CancellationToken cancellationToken = default)
+    {
+        if (await GetForMonthAsync(userId, month, cancellationToken) is not null)
+        {
+            return false;
+        }
+
+        Summaries.Add(new SummaryDto(
+            Guid.CreateVersion7(), userId, new DateOnly(month.Year, month.Month, 1), SummaryStatus.Skipped, false, null, null,
+            null, InsightStatus.None, DateTimeOffset.UtcNow));
+        return true;
+    }
+
+    public Task<bool> AnswerInsightAsync(Guid summaryId, Guid userId, bool accepted, CancellationToken cancellationToken = default)
+    {
+        var index = Summaries.FindIndex(s => s.Id == summaryId && s.UserId == userId && s.InsightStatus == InsightStatus.Offered);
+        if (index < 0)
+        {
+            return Task.FromResult(false);
+        }
+
+        Summaries[index] = Summaries[index] with { InsightStatus = accepted ? InsightStatus.Revealed : InsightStatus.Declined };
+        return Task.FromResult(true);
     }
 }

@@ -42,7 +42,30 @@ internal sealed class ProgressRepository(NpgsqlDataSource dataSource)
         command.Parameters.Add(new() { Value = userId });
         command.Parameters.Add(new() { Value = goalId });
         command.Parameters.Add(new() { Value = limit });
+        return await ReadAsync(command, cancellationToken);
+    }
 
+    public async Task<IReadOnlyList<ProgressEntry>> ListByPeriodAsync(
+        Guid userId,
+        DateOnly from,
+        DateOnly to,
+        CancellationToken cancellationToken)
+    {
+        await using var command = dataSource.CreateCommand(
+            """
+            SELECT id, user_id, goal_id, occurred_on, amount, unit, note, created_at
+            FROM progress.progress_entries
+            WHERE user_id = $1 AND occurred_on BETWEEN $2 AND $3
+            ORDER BY occurred_on, created_at
+            """);
+        command.Parameters.Add(new() { Value = userId });
+        command.Parameters.Add(new() { Value = from });
+        command.Parameters.Add(new() { Value = to });
+        return await ReadAsync(command, cancellationToken);
+    }
+
+    private static async Task<IReadOnlyList<ProgressEntry>> ReadAsync(NpgsqlCommand command, CancellationToken cancellationToken)
+    {
         var entries = new List<ProgressEntry>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))

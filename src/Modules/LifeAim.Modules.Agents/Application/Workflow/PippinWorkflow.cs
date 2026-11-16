@@ -152,7 +152,52 @@ internal sealed class PippinWorkflow : IPippin
     /// The daily follow-up may start a conversation only when the user is between tasks, or still in an earlier
     /// follow-up nobody answered: never in the middle of a cadastro, a detailing or the plan proposal.
     /// </summary>
-    public static bool CanStartCheckIn(Stage stage) => stage is Stage.CollectGoals or Stage.CheckIn;
+    public static bool CanStartCheckIn(Stage stage) => stage is Stage.CollectGoals or Stage.CheckIn or Stage.SummaryInsight;
+
+    /// <summary>The monthly summary waits the same way: between tasks, or with a follow-up nobody answered.</summary>
+    public static bool CanSendSummary(Stage stage) => stage is Stage.CollectGoals or Stage.CheckIn;
+
+    /// <summary>
+    /// Pippin sends the monthly summary on his own (Funcionalidade 4). Under the per-user lock: the stage is checked
+    /// again, the message sent, <paramref name="record"/> saves it, and with an insight invitation the conversation waits
+    /// at <see cref="Stage.SummaryInsight"/> (unanswered follow-ups stay in the draft, to be resumed afterwards).
+    /// False, with nothing recorded, when the user is busy or the message could not be delivered.
+    /// </summary>
+    public async Task<bool> SendSummaryAsync(
+        Guid userId,
+        string text,
+        Guid? insightSummaryId,
+        Func<CancellationToken, Task> record,
+        CancellationToken cancellationToken)
+    {
+        var userLock = UserLocks.GetOrAdd(userId, _ => new SemaphoreSlim(1, 1));
+        await userLock.WaitAsync(cancellationToken);
+        try
+        {
+            var state = await _store.LoadAsync(userId, cancellationToken);
+            if (!CanSendSummary(state.Stage) || !await _channel.SendAsync(userId, text, cancellationToken))
+            {
+                return false;
+            }
+
+            await record(cancellationToken);
+            var next = insightSummaryId is null
+                ? state
+                : state with
+                {
+                    Stage = Stage.SummaryInsight,
+                    Draft = (state.Draft ?? GoalsDraft.Empty(null)) with { SummaryId = insightSummaryId },
+                };
+
+            await _store.SaveProactiveAsync(userId, next, text, state.Stage, cancellationToken);
+            _logger.LogInformation("Pippin sent the monthly summary: {From} → {To}", state.Stage, next.Stage);
+            return true;
+        }
+        finally
+        {
+            userLock.Release();
+        }
+    }
 
     /// <summary>
     /// Pippin asks, on his own, about the activities of the daily follow-up (Funcionalidade 3). Under the same per-user
@@ -178,9 +223,10 @@ internal sealed class PippinWorkflow : IPippin
 
             var asked = await markAsked(cancellationToken);
             var draft = state.Draft ?? GoalsDraft.Empty(null);
-            var stillOpen = (state.Stage == Stage.CheckIn ? draft.CheckIns ?? [] : [])
+            // Follow-ups still open are kept (also when an insight invitation was waiting: it lapses, without insisting).
+            var stillOpen = (state.Stage is Stage.CheckIn or Stage.SummaryInsight ? draft.CheckIns ?? [] : [])
                 .Where(old => asked.All(a => a.CheckInId != old.CheckInId));
-            draft = draft with { CheckIns = stillOpen.Concat(asked).ToList() };
+            draft = draft with { CheckIns = stillOpen.Concat(asked).ToList(), SummaryId = null };
 
             await _store.SaveProactiveAsync(
                 userId, state with { Stage = Stage.CheckIn, Draft = draft }, text, state.Stage, cancellationToken);

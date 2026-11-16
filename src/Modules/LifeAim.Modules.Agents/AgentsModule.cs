@@ -1,8 +1,9 @@
-using LifeAim.BuildingBlocks;
+﻿using LifeAim.BuildingBlocks;
 using LifeAim.Modules.Agents.Application.Agent;
 using LifeAim.Modules.Agents.Application.FollowUp;
 using LifeAim.Modules.Agents.Application.Nodes;
 using LifeAim.Modules.Agents.Application.Planning;
+using LifeAim.Modules.Agents.Application.Reports;
 using LifeAim.Modules.Agents.Application.Workflow;
 using LifeAim.Modules.Agents.Contracts;
 using LifeAim.Modules.Agents.Infrastructure;
@@ -50,6 +51,7 @@ public static class AgentsModule
         services.AddSingleton<INode, ChoosePlanGoalNode>();
         services.AddSingleton<INode, RefinePlanGoalNode>();
         services.AddSingleton<INode, CheckInNode>();
+        services.AddSingleton<INode, SummaryInsightNode>();
         services.AddSingleton<GoalDetailing>();
         services.AddSingleton<FallbackRouter>();
         services.AddSingleton<GreetingReply>();
@@ -73,6 +75,9 @@ public static class AgentsModule
         // minute for activities whose moment arrived (or still unanswered) and Pippin asks about them.
         services.AddSingleton<CheckInWriter>();
 
+        // Funcionalidade 4: the monthly summary (and quarterly panorama), counted by Reporting and written by the AI.
+        services.AddSingleton<SummaryWriter>();
+
         services.AddQuartz(quartz =>
         {
             quartz.AddJob<PlanProposalsJob>(job => job.WithIdentity(PlanProposalsJob.Key));
@@ -88,6 +93,13 @@ public static class AgentsModule
                 .WithIdentity($"{DailyFollowUpJob.Key.Name}-trigger", DailyFollowUpJob.Key.Group)
                 .StartNow()
                 .WithSimpleSchedule(schedule => schedule.WithIntervalInSeconds(60).RepeatForever()));
+
+            quartz.AddJob<MonthlySummaryJob>(job => job.WithIdentity(MonthlySummaryJob.Key));
+            quartz.AddTrigger(trigger => trigger
+                .ForJob(MonthlySummaryJob.Key)
+                .WithIdentity($"{MonthlySummaryJob.Key.Name}-trigger", MonthlySummaryJob.Key.Group)
+                .StartNow()
+                .WithSimpleSchedule(schedule => schedule.WithIntervalInMinutes(5).RepeatForever()));
         });
         services.AddSingleton<IConversationReset, ConversationReset>();
 

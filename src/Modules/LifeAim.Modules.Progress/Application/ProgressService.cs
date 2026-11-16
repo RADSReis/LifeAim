@@ -31,6 +31,16 @@ internal sealed class ProgressService(ProgressRepository repository, TimeProvide
         return entries.Select(ToDto).ToList();
     }
 
+    public async Task<IReadOnlyList<ProgressEntryDto>> ListAsync(
+        Guid userId,
+        DateOnly from,
+        DateOnly to,
+        CancellationToken cancellationToken = default)
+    {
+        var entries = await repository.ListByPeriodAsync(userId, from, to, cancellationToken);
+        return entries.Select(ToDto).ToList();
+    }
+
     private static ProgressEntryDto ToDto(ProgressEntry entry) =>
         new(entry.Id, entry.UserId, entry.GoalId, entry.OccurredOn, entry.Amount, entry.Unit, entry.Note, entry.CreatedAt);
 }

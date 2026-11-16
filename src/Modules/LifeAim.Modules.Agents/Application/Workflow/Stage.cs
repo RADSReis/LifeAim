@@ -50,4 +50,10 @@ internal enum Stage
     /// ones still unconfirmed) and waits to hear whether they happened. The activities asked are in the draft.
     /// </summary>
     CheckIn,
+
+    /// <summary>
+    /// The monthly summary was sent (Funcionalidade 4) and ended with an invitation ("Tive um insight sobre seu hábito
+    /// de leitura. Quer saber qual?"): Pippin waits for yes or no. Anything else drops the invitation, without insisting.
+    /// </summary>
+    SummaryInsight,
 }

@@ -15,6 +15,13 @@ public interface IProgressService
         Guid goalId,
         int limit = 50,
         CancellationToken cancellationToken = default);
+
+    /// <summary>All the user's entries from <paramref name="from"/> to <paramref name="to"/> (inclusive), oldest day first.</summary>
+    Task<IReadOnlyList<ProgressEntryDto>> ListAsync(
+        Guid userId,
+        DateOnly from,
+        DateOnly to,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>

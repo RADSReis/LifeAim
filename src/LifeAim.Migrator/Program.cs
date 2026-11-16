@@ -8,6 +8,7 @@ using LifeAim.Modules.Communication;
 using LifeAim.Modules.Goals;
 using LifeAim.Modules.Planning;
 using LifeAim.Modules.Progress;
+using LifeAim.Modules.Reporting;
 using Microsoft.Extensions.Configuration;
 using Npgsql;
 
@@ -19,6 +20,7 @@ ModuleMigrations[] modules =
     AgentsModule.Migrations,
     ProgressModule.Migrations,
     PlanningModule.Migrations,
+    ReportingModule.Migrations,
 ];
 
 // Locally: User Secrets (shared with the API). On the VPS: ConnectionStrings__LifeAim.
