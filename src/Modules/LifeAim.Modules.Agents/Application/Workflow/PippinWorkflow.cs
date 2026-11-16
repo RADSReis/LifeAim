@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using LifeAim.Modules.Agents.Application.Agent;
 using LifeAim.Modules.Agents.Application.Nodes;
+using LifeAim.Modules.Agents.Application.Planning;
 using LifeAim.Modules.Agents.Contracts;
 using LifeAim.Modules.Agents.Infrastructure.Ai;
 using LifeAim.Modules.Goals.Contracts;
@@ -32,6 +33,7 @@ internal sealed class PippinWorkflow : IPippin
     private readonly PathClassifier _classifier;
     private readonly GoalsAgent _agent;
     private readonly IGoalService _goals;
+    private readonly IPippinChannel _channel;
     private readonly ILogger<PippinWorkflow> _logger;
     private readonly Dictionary<Stage, INode> _nodes;
 
@@ -43,8 +45,10 @@ internal sealed class PippinWorkflow : IPippin
         PathClassifier classifier,
         GoalsAgent agent,
         IGoalService goals,
+        IPippinChannel channel,
         ILogger<PippinWorkflow> logger)
     {
+        _channel = channel;
         _store = store;
         _router = router;
         _greeting = greeting;
@@ -103,6 +107,40 @@ internal sealed class PippinWorkflow : IPippin
                 cancellationToken);
 
             return reply;
+        }
+        finally
+        {
+            userLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Pippin starts the conversation himself: the plan proposal is ready (Funcionalidade 2). Only when the user is
+    /// not in the middle of something (CollectGoals, between tasks); otherwise false, and the job tries again later.
+    /// Runs under the same per-user lock as the replies, so it never overwrites a message being answered.
+    /// </summary>
+    public async Task<bool> OfferPlanAsync(Guid userId, Guid proposalId, CancellationToken cancellationToken)
+    {
+        var userLock = UserLocks.GetOrAdd(userId, _ => new SemaphoreSlim(1, 1));
+        await userLock.WaitAsync(cancellationToken);
+        try
+        {
+            var state = await _store.LoadAsync(userId, cancellationToken);
+            if (state.Stage != Stage.CollectGoals)
+            {
+                return false;
+            }
+
+            if (!await _channel.SendAsync(userId, PlanReview.Invitation, cancellationToken))
+            {
+                return false;
+            }
+
+            var draft = GoalsDraft.Empty(state.Draft?.Horizon) with { ProposalId = proposalId };
+            await _store.SaveProactiveAsync(
+                userId, state with { Stage = Stage.OfferPlan, Draft = draft }, PlanReview.Invitation, state.Stage, cancellationToken);
+            _logger.LogInformation("Pippin offered plan proposal {ProposalId}: {From} → {To}", proposalId, state.Stage, Stage.OfferPlan);
+            return true;
         }
         finally
         {

@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using LifeAim.Modules.Agents.Application.Workflow;
 using LifeAim.Modules.Goals.Contracts;
+using LifeAim.Modules.Planning.Contracts;
 using Microsoft.Extensions.AI;
 
 namespace LifeAim.Modules.Agents.Application.Nodes;
@@ -11,8 +12,18 @@ namespace LifeAim.Modules.Agents.Application.Nodes;
 /// saves them (ConfirmGoals, to start) and the node that deepens them (DetailGoals, to go on): the next goal in
 /// the queue gets ONE contextual question from the AI (what is missing + the plan); with none left, the summary.
 /// </summary>
-internal sealed class GoalDetailing(IChatClient chatClient, IGoalService goals, TimeProvider timeProvider)
+internal sealed class GoalDetailing(
+    IChatClient chatClient,
+    IGoalService goals,
+    IPlanningService planning,
+    TimeProvider timeProvider)
 {
+    /// <summary>The end of the intake (Funcionalidade 2, "Ao finalizar o cadastro"), with the Notion page's words.</summary>
+    public const string PreparingProposal =
+        "Já entendi melhor o que você quer conquistar. Agora vou analisar suas metas e considerar o tempo que você " +
+        "tem disponível para preparar uma primeira sugestão de planejamento. Não precisa se preocupar com essa parte " +
+        "agora — vou organizar uma proposta e depois conversamos sobre ela. 😉";
+
     private static readonly CultureInfo PtBr = CultureInfo.GetCultureInfo("pt-BR");
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
@@ -30,22 +41,31 @@ internal sealed class GoalDetailing(IChatClient chatClient, IGoalService goals, 
         bool withQuestion = true)
     {
         var horizon = context.Draft?.Horizon;
+        var proposeAfter = context.Draft?.ProposeAfter ?? false;
         var saved = await goals.ListAsync(context.UserId, cancellationToken);
         var remaining = queue.Where(id => saved.Any(g => g.Id == id)).ToList(); // a deleted goal just drops out
 
         if (remaining.Count == 0)
         {
             context.Draft = GoalsDraft.Empty(horizon);
+            var summary = $"{prefix}\n\nPronto, terminamos! 🎉\n\n{GoalPlan.Summary(saved)}";
+
+            // Right after the intake: the plan proposal is prepared in the background, nothing more is asked now.
+            if (proposeAfter && saved.Count > 0)
+            {
+                await planning.RequestAsync(context.UserId, cancellationToken);
+                return NodeResult.Answer($"{summary}\n\n{PreparingProposal}", nextStage: Stage.CollectGoals);
+            }
+
             var more = horizon is { } date
                 ? $"Quer adicionar mais alguma meta até {date.ToString("dd/MM/yyyy", PtBr)}?"
                 : "Quer adicionar mais alguma meta?";
-            var summary = $"{prefix}\n\nPronto, terminamos! 🎉\n\n{GoalPlan.Summary(saved)}";
             return NodeResult.Answer(withQuestion ? $"{summary}\n\n{more}" : summary, nextStage: Stage.CollectGoals);
         }
 
         var goal = GoalExtraction.FromSaved(saved.First(g => g.Id == remaining[0]));
         var question = await AskAsync(goal, horizon, cancellationToken);
-        context.Draft = new GoalsDraft(horizon, [goal], [], remaining, Question: question);
+        context.Draft = new GoalsDraft(horizon, [goal], [], remaining, Question: question, ProposeAfter: proposeAfter);
         return NodeResult.Answer(withQuestion ? $"{prefix}\n\n{question}" : prefix, nextStage: Stage.DetailGoals);
     }
 

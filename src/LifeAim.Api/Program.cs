@@ -5,6 +5,7 @@ using LifeAim.Modules.Goals;
 using LifeAim.Modules.Planning;
 using LifeAim.Modules.Progress;
 using LifeAim.Modules.Reporting;
+using Quartz;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -20,6 +21,9 @@ builder.Services
     .AddAgentsModule(builder.Configuration)
     .AddCommunicationModule(builder.Configuration)
     .AddReportingModule();
+
+// Runs the modules' background jobs (registered by each module with AddQuartz) for as long as the API runs.
+builder.Services.AddQuartzHostedService(options => options.WaitForJobsToComplete = true);
 
 var app = builder.Build();
 

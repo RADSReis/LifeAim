@@ -1,5 +1,6 @@
 using LifeAim.Modules.Agents.Application.Agent;
 using LifeAim.Modules.Agents.Application.Nodes;
+using LifeAim.Modules.Agents.Application.Planning;
 using LifeAim.Modules.Agents.Application.Workflow;
 using LifeAim.Modules.Agents.Contracts;
 using LifeAim.Modules.Agents.Infrastructure.Ai;
@@ -1048,11 +1049,15 @@ public class PippinWorkflowTests
     private void AtStage(Stage stage, GoalsDraft? draft = null) =>
         _store.States[UserId] = new ConversationState(stage, "Rafael", draft);
 
+    private readonly FakePlanningService _planning = new();
+    private readonly FakePippinChannel _channel = new();
+
     private PippinWorkflow CreateWorkflow(IChatClient ai, FakeGoalService? goals = null, FakeProgressService? progress = null)
     {
         goals ??= new FakeGoalService();
         progress ??= new FakeProgressService();
-        var detailing = new GoalDetailing(ai, goals, November);
+        var detailing = new GoalDetailing(ai, goals, _planning, November);
+        var review = new PlanReview(_planning, goals);
         return new(
             _store,
             [
@@ -1062,12 +1067,16 @@ public class PippinWorkflowTests
                 new ConfirmGoalsNode(ai, goals, detailing, November),
                 new DetailGoalsNode(ai, detailing, November),
                 new ConfirmCancelGoalNode(ai, goals, detailing),
+                new OfferPlanNode(ai, review),
+                new ChoosePlanGoalNode(ai, review),
+                new RefinePlanGoalNode(ai, review, detailing, _planning, November),
             ],
             new FallbackRouter(),
             new GreetingReply(),
             new PathClassifier(ai),
             new GoalsAgent(ai, goals, progress, November, NullLoggerFactory.Instance),
             goals,
+            _channel,
             NullLogger<PippinWorkflow>.Instance);
     }
 

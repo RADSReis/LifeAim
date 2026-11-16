@@ -11,6 +11,7 @@
     <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.11.0" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.15" />
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.15" />
+    <PackageReference Include="Quartz.Extensions.DependencyInjection" Version="3.13.1" />
   </ItemGroup>
 
   <ItemGroup>
@@ -20,6 +21,8 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="LifeAim.Modules.Agents.Tests" />
+    <!-- The real-AI tests run the plan proposals job themselves (Quartz is off in tests). -->
+    <InternalsVisibleTo Include="LifeAim.IntegrationTests" />
   </ItemGroup>
 
   <ItemGroup>
@@ -28,6 +31,7 @@
     <ProjectReference Include="..\LifeAim.Modules.Goals\LifeAim.Modules.Goals.csproj" />
     <!-- Pippin records progress only through the Progress module's public contract (IProgressService). -->
     <ProjectReference Include="..\LifeAim.Modules.Progress\LifeAim.Modules.Progress.csproj" />
+    <ProjectReference Include="..\LifeAim.Modules.Planning\LifeAim.Modules.Planning.csproj" />
   </ItemGroup>
 
 </Project>

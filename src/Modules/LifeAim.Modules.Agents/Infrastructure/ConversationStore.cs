@@ -78,6 +78,42 @@ internal sealed class ConversationStore(NpgsqlDataSource dataSource, TimeProvide
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
 
+        await UpsertAsync(connection, transaction, userId, state, now, cancellationToken);
+
+        // The assistant's reply gets a later timestamp so the order survives even within one millisecond.
+        await InsertMessageAsync(connection, transaction, userId, "user", userMessage, messageStage, now, cancellationToken);
+        await InsertMessageAsync(
+            connection, transaction, userId, "assistant", assistantMessage, messageStage, now.AddTicks(10), cancellationToken);
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task SaveProactiveAsync(
+        Guid userId,
+        ConversationState state,
+        string assistantMessage,
+        Stage messageStage,
+        CancellationToken cancellationToken)
+    {
+        var now = timeProvider.GetUtcNow();
+
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        await UpsertAsync(connection, transaction, userId, state, now, cancellationToken);
+        await InsertMessageAsync(connection, transaction, userId, "assistant", assistantMessage, messageStage, now, cancellationToken);
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    private static async Task UpsertAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        Guid userId,
+        ConversationState state,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
         await using (var upsert = new NpgsqlCommand(
             """
             INSERT INTO agents.conversations (user_id, stage, user_name, updated_at, draft)
@@ -98,13 +134,6 @@ internal sealed class ConversationStore(NpgsqlDataSource dataSource, TimeProvide
             });
             await upsert.ExecuteNonQueryAsync(cancellationToken);
         }
-
-        // The assistant's reply gets a later timestamp so the order survives even within one millisecond.
-        await InsertMessageAsync(connection, transaction, userId, "user", userMessage, messageStage, now, cancellationToken);
-        await InsertMessageAsync(
-            connection, transaction, userId, "assistant", assistantMessage, messageStage, now.AddTicks(10), cancellationToken);
-
-        await transaction.CommitAsync(cancellationToken);
     }
 
     public async Task<bool> DeleteAsync(Guid userId, CancellationToken cancellationToken)

@@ -1,5 +1,7 @@
 using LifeAim.Modules.Agents.Application.Workflow;
+using LifeAim.Modules.Agents.Contracts;
 using LifeAim.Modules.Goals.Contracts;
+using LifeAim.Modules.Planning.Contracts;
 using LifeAim.Modules.Progress.Contracts;
 using Microsoft.Extensions.AI;
 
@@ -73,6 +75,18 @@ internal sealed class InMemoryConversationStore : IConversationStore
     {
         States[userId] = state;
         Messages.Add((userId, new ConversationTurn(ConversationRole.User, userMessage), messageStage));
+        Messages.Add((userId, new ConversationTurn(ConversationRole.Assistant, assistantMessage), messageStage));
+        return Task.CompletedTask;
+    }
+
+    public Task SaveProactiveAsync(
+        Guid userId,
+        ConversationState state,
+        string assistantMessage,
+        Stage messageStage,
+        CancellationToken cancellationToken)
+    {
+        States[userId] = state;
         Messages.Add((userId, new ConversationTurn(ConversationRole.Assistant, assistantMessage), messageStage));
         return Task.CompletedTask;
     }
@@ -199,4 +213,106 @@ internal sealed class FakeProgressService : IProgressService
         Task.FromResult<IReadOnlyList<ProgressEntryDto>>(
             Entries.Where(e => e.UserId == userId && e.GoalId == goalId)
                 .OrderByDescending(e => e.OccurredOn).ThenByDescending(e => e.CreatedAt).Take(limit).ToList());
+}
+
+/// <summary>The Planning module's contract in memory, with the same status rules as the database.</summary>
+internal sealed class FakePlanningService : IPlanningService
+{
+    public List<PlanProposalDto> Proposals { get; } = [];
+
+    public Task<bool> RequestAsync(Guid userId, CancellationToken cancellationToken = default)
+    {
+        if (Proposals.Any(p => p.UserId == userId && p.Status == ProposalStatus.Requested))
+        {
+            return Task.FromResult(false);
+        }
+
+        foreach (var open in Proposals.Where(p => p.UserId == userId && p.Status is ProposalStatus.Ready or ProposalStatus.Offered).ToList())
+        {
+            Set(open.Id, p => p with { Status = ProposalStatus.Closed });
+        }
+
+        Proposals.Add(new PlanProposalDto(Guid.CreateVersion7(), userId, ProposalStatus.Requested, 0, DateTimeOffset.UtcNow, []));
+        return Task.FromResult(true);
+    }
+
+    public Task<IReadOnlyList<PlanProposalDto>> ListByStatusAsync(
+        ProposalStatus status, int limit = 20, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<PlanProposalDto>>(Proposals.Where(p => p.Status == status).Take(limit).ToList());
+
+    public Task<PlanProposalDto?> GetOpenAsync(Guid userId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(Proposals.FirstOrDefault(p => p.UserId == userId && p.Status is ProposalStatus.Ready or ProposalStatus.Offered));
+
+    public Task<IReadOnlyList<Guid>> AcceptedGoalIdsAsync(Guid userId, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<Guid>>(Proposals.Where(p => p.UserId == userId)
+            .SelectMany(p => p.Goals).Where(g => g.Status == GoalProposalStatus.Accepted).Select(g => g.GoalId).ToList());
+
+    public Task MarkReadyAsync(Guid proposalId, IReadOnlyList<GoalProposalInput> goals, CancellationToken cancellationToken = default)
+    {
+        var items = goals.Select((g, i) => new GoalProposalDto(g.GoalId, i + 1, g.Message, g.Question, g.Routines, GoalProposalStatus.Open)).ToList();
+        Set(proposalId, p => p with { Status = items.Count == 0 ? ProposalStatus.Closed : ProposalStatus.Ready, Goals = items });
+        return Task.CompletedTask;
+    }
+
+    public Task MarkFailedAttemptAsync(Guid proposalId, string error, CancellationToken cancellationToken = default)
+    {
+        Set(proposalId, p => p with
+        {
+            Attempts = p.Attempts + 1,
+            Status = p.Attempts + 1 >= IPlanningService.MaxAttempts ? ProposalStatus.Failed : p.Status,
+        });
+        return Task.CompletedTask;
+    }
+
+    public Task MarkOfferedAsync(Guid proposalId, CancellationToken cancellationToken = default)
+    {
+        Set(proposalId, p => p with { Status = ProposalStatus.Offered });
+        return Task.CompletedTask;
+    }
+
+    public Task SetGoalStatusAsync(Guid proposalId, Guid goalId, GoalProposalStatus status, CancellationToken cancellationToken = default)
+    {
+        Set(proposalId, p => p with { Goals = p.Goals.Select(g => g.GoalId == goalId ? g with { Status = status } : g).ToList() });
+        return Task.CompletedTask;
+    }
+
+    public Task CloseAsync(Guid proposalId, CancellationToken cancellationToken = default)
+    {
+        Set(proposalId, p => p with { Status = ProposalStatus.Closed });
+        return Task.CompletedTask;
+    }
+
+    /// <summary>A proposal already written, as the job leaves it (ready to offer).</summary>
+    public PlanProposalDto AddReady(Guid userId, params GoalProposalInput[] goals)
+    {
+        var proposal = new PlanProposalDto(
+            Guid.CreateVersion7(), userId, ProposalStatus.Ready, 0, DateTimeOffset.UtcNow,
+            goals.Select((g, i) => new GoalProposalDto(g.GoalId, i + 1, g.Message, g.Question, g.Routines, GoalProposalStatus.Open)).ToList());
+        Proposals.Add(proposal);
+        return proposal;
+    }
+
+    private void Set(Guid id, Func<PlanProposalDto, PlanProposalDto> change)
+    {
+        var index = Proposals.FindIndex(p => p.Id == id);
+        Proposals[index] = change(Proposals[index]);
+    }
+}
+
+/// <summary>The channel for messages Pippin starts himself: records what would be sent.</summary>
+internal sealed class FakePippinChannel : IPippinChannel
+{
+    public bool Delivers { get; set; } = true;
+
+    public List<(Guid UserId, string Text)> Sent { get; } = [];
+
+    public Task<bool> SendAsync(Guid userId, string text, CancellationToken cancellationToken = default)
+    {
+        if (Delivers)
+        {
+            Sent.Add((userId, text));
+        }
+
+        return Task.FromResult(Delivers);
+    }
 }

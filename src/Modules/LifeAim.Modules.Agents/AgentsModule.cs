@@ -1,6 +1,7 @@
 using LifeAim.BuildingBlocks;
 using LifeAim.Modules.Agents.Application.Agent;
 using LifeAim.Modules.Agents.Application.Nodes;
+using LifeAim.Modules.Agents.Application.Planning;
 using LifeAim.Modules.Agents.Application.Workflow;
 using LifeAim.Modules.Agents.Contracts;
 using LifeAim.Modules.Agents.Infrastructure;
@@ -10,6 +11,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using OpenAI.Chat;
+using Quartz;
 
 namespace LifeAim.Modules.Agents;
 
@@ -43,6 +45,9 @@ public static class AgentsModule
         services.AddSingleton<INode, ConfirmGoalsNode>();
         services.AddSingleton<INode, DetailGoalsNode>();
         services.AddSingleton<INode, ConfirmCancelGoalNode>();
+        services.AddSingleton<INode, OfferPlanNode>();
+        services.AddSingleton<INode, ChoosePlanGoalNode>();
+        services.AddSingleton<INode, RefinePlanGoalNode>();
         services.AddSingleton<GoalDetailing>();
         services.AddSingleton<FallbackRouter>();
         services.AddSingleton<GreetingReply>();
@@ -50,7 +55,26 @@ public static class AgentsModule
 
         // The first agent with tools: conversations about saved goals (consult, change, cancel, record progress).
         services.AddSingleton<GoalsAgent>();
-        services.AddSingleton<IPippin, PippinWorkflow>();
+        services.AddSingleton<PippinWorkflow>();
+        services.AddSingleton<IPippin>(sp => sp.GetRequiredService<PippinWorkflow>());
+
+        // Messages Pippin starts himself go out through a channel module (Communication registers Discord's);
+        // without one, nothing is sent and nothing is marked as sent.
+        services.TryAddSingleton<IPippinChannel, NoPippinChannel>();
+
+        // Funcionalidade 2: the plan proposal, written and offered in the background by a Quartz job. The work to
+        // do is in planning.proposals, so the job only polls; the host (the API) starts Quartz.
+        services.AddSingleton<PlanReview>();
+        services.AddSingleton<PlanProposer>();
+        services.AddQuartz(quartz =>
+        {
+            quartz.AddJob<PlanProposalsJob>(job => job.WithIdentity(PlanProposalsJob.Key));
+            quartz.AddTrigger(trigger => trigger
+                .ForJob(PlanProposalsJob.Key)
+                .WithIdentity($"{PlanProposalsJob.Key.Name}-trigger", PlanProposalsJob.Key.Group)
+                .StartNow()
+                .WithSimpleSchedule(schedule => schedule.WithIntervalInSeconds(30).RepeatForever()));
+        });
         services.AddSingleton<IConversationReset, ConversationReset>();
 
         return services;

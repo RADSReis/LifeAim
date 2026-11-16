@@ -32,4 +32,15 @@ internal sealed class ChannelUserRepository(NpgsqlDataSource dataSource, TimePro
 
         return (Guid)(await command.ExecuteScalarAsync(cancellationToken))!;
     }
+
+    /// <summary>The channel's id of a LifeAim user (their Discord id), or null when they never wrote there.</summary>
+    public async Task<string?> FindExternalIdAsync(string channel, Guid userId, CancellationToken cancellationToken)
+    {
+        await using var command = dataSource.CreateCommand(
+            "SELECT external_id FROM communication.channel_users WHERE channel = $1 AND id = $2");
+        command.Parameters.Add(new() { Value = channel });
+        command.Parameters.Add(new() { Value = userId });
+
+        return await command.ExecuteScalarAsync(cancellationToken) as string;
+    }
 }

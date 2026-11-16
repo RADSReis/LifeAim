@@ -18,6 +18,17 @@ internal interface IConversationStore
         Stage messageStage,
         CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Saves the new state and a message Pippin sent on his own (no user message before it), e.g. the invitation
+    /// to see the plan proposal. <paramref name="messageStage"/> is the stage the message was sent from.
+    /// </summary>
+    Task SaveProactiveAsync(
+        Guid userId,
+        ConversationState state,
+        string assistantMessage,
+        Stage messageStage,
+        CancellationToken cancellationToken);
+
     /// <summary>Deletes the state and every message of the user, all or nothing. False if there was nothing.</summary>
     Task<bool> DeleteAsync(Guid userId, CancellationToken cancellationToken);
 }

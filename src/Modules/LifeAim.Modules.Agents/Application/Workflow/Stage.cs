@@ -29,4 +29,19 @@ internal enum Stage
     /// explicit "sim" (Funcionalidade 1, decision 5). Then the conversation goes back to where it was.
     /// </summary>
     ConfirmCancelGoal,
+
+    /// <summary>
+    /// The plan proposal prepared in the background is ready (Funcionalidade 2): Pippin sent, on his own, "Quer dar
+    /// uma olhada?" and waits for yes or not now.
+    /// </summary>
+    OfferPlan,
+
+    /// <summary>Pippin listed up to 3 goals of the proposal and waits for the user to pick one (or another).</summary>
+    ChoosePlanGoal,
+
+    /// <summary>
+    /// One goal of the proposal in focus: Pippin showed his suggestion and a contextual question, and refines it with
+    /// the user until they agree (saved as the goal's plan), skip it, or move on.
+    /// </summary>
+    RefinePlanGoal,
 }

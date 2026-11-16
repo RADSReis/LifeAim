@@ -24,7 +24,11 @@ public sealed class RealAiApiFactory : Microsoft.AspNetCore.Mvc.Testing.WebAppli
     {
         builder.ConfigureAppConfiguration(config =>
             config.AddInMemoryCollection(new Dictionary<string, string?> { ["Discord:Token"] = "" }));
-        builder.ConfigureTestServices(services => services.AddSingleton<TimeProvider>(new FixedClock(Now)));
+        builder.ConfigureTestServices(services =>
+        {
+            LifeAimApiFactory.WithoutBackgroundJobs(services);
+            services.AddSingleton<TimeProvider>(new FixedClock(Now));
+        });
     }
 
     private sealed class FixedClock(DateTimeOffset now) : TimeProvider
@@ -587,6 +591,8 @@ public sealed class PippinRealAiTests(RealAiApiFactory factory, ITestOutputHelpe
                  {
                      "DELETE FROM goals.goals WHERE user_id = $1",
                      "DELETE FROM progress.progress_entries WHERE user_id = $1",
+                     "DELETE FROM planning.goal_proposals WHERE proposal_id IN (SELECT id FROM planning.proposals WHERE user_id = $1)",
+                     "DELETE FROM planning.proposals WHERE user_id = $1",
                  })
         {
             await using var command = Db.CreateCommand(sql);

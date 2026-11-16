@@ -12,11 +12,12 @@ namespace LifeAim.Modules.Communication.Infrastructure.DiscordBot;
 /// </summary>
 internal sealed class DiscordBotService(
     IOptions<DiscordOptions> options,
+    DiscordConnection connection,
     ChannelUserRepository channelUsers,
     IPippin pippin,
     ILogger<DiscordBotService> logger) : BackgroundService
 {
-    private const string Channel = "discord";
+    public const string Channel = "discord";
     private const string NotAllowedReply =
         "Oi! Eu ainda sou uma versão privada e só converso com quem foi convidado. 🙂";
     private const string FailureReply =
@@ -46,6 +47,7 @@ internal sealed class DiscordBotService(
 
         await _client.LoginAsync(TokenType.Bot, _options.Token);
         await _client.StartAsync(); // Connects in the background; the library reconnects by itself.
+        connection.Client = _client;
 
         try
         {
@@ -63,6 +65,7 @@ internal sealed class DiscordBotService(
 
         if (_client is not null)
         {
+            connection.Client = null;
             await _client.StopAsync();
             await _client.LogoutAsync();
             await _client.DisposeAsync();

@@ -21,6 +21,12 @@ namespace LifeAim.Modules.Agents.Application.Workflow;
 /// Where the conversation was when the cancellation was asked: it goes back there afterwards, with the rest of
 /// this draft (a detailing in progress) untouched.
 /// </param>
+/// <param name="ProposeAfter">
+/// The detailing started right after saving new goals: when it ends, Pippin asks for the plan proposal in the
+/// background (Funcionalidade 2). Not when the user only came back to detail one goal.
+/// </param>
+/// <param name="ProposalId">While going through the plan proposal (Funcionalidade 2): which one.</param>
+/// <param name="Shown">While choosing a goal of the proposal: the (up to 3) goals Pippin listed, in order.</param>
 internal sealed record GoalsDraft(
     DateOnly? Horizon,
     IReadOnlyList<GoalDraft> Goals,
@@ -30,7 +36,10 @@ internal sealed record GoalsDraft(
     string? Question = null,
     PlanDraft? Plan = null,
     Guid? CancelGoalId = null,
-    Stage? ReturnStage = null)
+    Stage? ReturnStage = null,
+    bool ProposeAfter = false,
+    Guid? ProposalId = null,
+    IReadOnlyList<Guid>? Shown = null)
 {
     public static GoalsDraft Empty(DateOnly? horizon) => new(horizon, [], []);
 }

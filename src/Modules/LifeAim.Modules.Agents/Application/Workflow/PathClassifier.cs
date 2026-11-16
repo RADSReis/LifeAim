@@ -24,6 +24,21 @@ internal sealed class PathClassifier(IChatClient chatClient)
                 [Stage.DetailGoals] =
                     "aprofundar uma meta JÁ SALVA respondendo às perguntas do Pippin para montar o plano dela " +
                     "(\"vamos detalhar a meta de leitura\") (informe goalNumber)",
+                [Stage.ChoosePlanGoal] =
+                    "ver a PROPOSTA de planejamento que o Pippin preparou e enviou (\"quero ver a proposta\", " +
+                    "\"vamos continuar a proposta\"); não serve para detalhar ou aprofundar uma meta",
+            },
+            [Stage.OfferPlan] = new Dictionary<Stage, string>
+            {
+                [Stage.CollectGoals] = "cadastrar uma meta NOVA, que ainda não existe",
+            },
+            [Stage.ChoosePlanGoal] = new Dictionary<Stage, string>
+            {
+                [Stage.CollectGoals] = "cadastrar uma meta NOVA, que ainda não existe",
+            },
+            [Stage.RefinePlanGoal] = new Dictionary<Stage, string>
+            {
+                [Stage.CollectGoals] = "cadastrar uma meta NOVA, que ainda não existe",
             },
             [Stage.DetailGoals] = new Dictionary<Stage, string>
             {
@@ -53,6 +68,13 @@ internal sealed class PathClassifier(IChatClient chatClient)
         }
 
         var reason = answer.Reason ?? "";
+
+        // The model sometimes writes the stage itself as the route ("route": "DetailGoals"): that is a goto.
+        if (Enum.TryParse<Stage>(answer.Route?.Trim(), ignoreCase: true, out var routeStage))
+        {
+            answer = answer with { Route = "goto", Stage = answer.Stage ?? routeStage.ToString() };
+        }
+
         switch (answer.Route?.Trim().ToLowerInvariant())
         {
             case "goto" when Enum.TryParse<Stage>(answer.Stage, ignoreCase: true, out var stage):

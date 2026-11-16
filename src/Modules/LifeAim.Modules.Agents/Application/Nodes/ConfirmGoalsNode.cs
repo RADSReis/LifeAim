@@ -64,7 +64,8 @@ internal sealed class ConfirmGoalsNode(
         {
             case Decisions.Confirm:
                 var saved = await SaveAsync(context.UserId, updated, cancellationToken);
-                context.Draft = GoalsDraft.Empty(draft.Horizon);
+                // When the detailing of these goals ends, the plan proposal is prepared (Funcionalidade 2).
+                context.Draft = GoalsDraft.Empty(draft.Horizon) with { ProposeAfter = true };
                 var savedText = $"Salvei! ✅\n{GoalExtraction.List(updated)}";
 
                 // Straight to deepening every goal just saved, one at a time (→ DetailGoals): one question each.

@@ -1,4 +1,5 @@
 using LifeAim.BuildingBlocks;
+using LifeAim.Modules.Agents.Contracts;
 using LifeAim.Modules.Communication.Infrastructure;
 using LifeAim.Modules.Communication.Infrastructure.DiscordBot;
 using Microsoft.Extensions.Configuration;
@@ -21,8 +22,15 @@ public static class CommunicationModule
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<ChannelUserRepository>();
 
-        // A hosted service starts with the API and stops with it.
+        // A hosted service starts with the API and stops with it. It shares its connected client through
+        // DiscordConnection, so the channel below sends DMs without depending on the bot (which depends on Pippin,
+        // which depends on the channel: a cycle).
+        services.AddSingleton<DiscordConnection>();
         services.AddHostedService<DiscordBotService>();
+
+        // Messages Pippin starts himself (the plan proposal is ready) go out through Discord. Registered after the
+        // Agents module's default, so this one wins.
+        services.AddSingleton<IPippinChannel, DiscordPippinChannel>();
 
         return services;
     }
