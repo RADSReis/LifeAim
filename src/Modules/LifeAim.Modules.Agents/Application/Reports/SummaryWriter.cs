@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using LifeAim.Modules.Agents.Application.Nodes;
 using LifeAim.Modules.Reporting.Contracts;
 using Microsoft.Extensions.AI;
 
@@ -24,10 +25,14 @@ internal sealed class SummaryWriter(IChatClient chatClient)
     /// <summary>Fewer done days than this and no pattern is worth an insight.</summary>
     public const int MinDoneDaysForInsight = 8;
 
+    /// <param name="journal">
+    /// The month of the weight-loss journal, already counted (FitnessPeriod.Summary), or null for someone who does not
+    /// keep it.
+    /// </param>
     public async Task<WrittenSummary> WriteAsync(
-        MonthlyReportDto report, string? userName, CancellationToken cancellationToken)
+        MonthlyReportDto report, string? userName, CancellationToken cancellationToken, string? journal = null)
     {
-        List<ChatMessage> messages = [new(ChatRole.System, Instructions(report, userName))];
+        List<ChatMessage> messages = [new(ChatRole.System, Instructions(report, userName, journal))];
         var response = await chatClient.GetResponseAsync<SummaryAnswer>(messages, cancellationToken: cancellationToken);
         if (!response.TryGetResult(out var answer) || string.IsNullOrWhiteSpace(answer.Message))
         {
@@ -37,7 +42,7 @@ internal sealed class SummaryWriter(IChatClient chatClient)
         // The invitation only with something to reveal, and only when the history is long enough to show a pattern.
         var hasInsight = !string.IsNullOrWhiteSpace(answer.InsightTeaser)
                          && !string.IsNullOrWhiteSpace(answer.Insight)
-                         && report.Month.Goals.Any(g => g.Done >= MinDoneDaysForInsight);
+                         && (journal is not null || report.Month.Goals.Any(g => g.Done >= MinDoneDaysForInsight));
 
         return new WrittenSummary(
             answer.Message.Trim(),
@@ -61,8 +66,20 @@ internal sealed class SummaryWriter(IChatClient chatClient)
 
     internal static string MonthName(DateOnly month) => month.ToString("MMMM", PtBr);
 
-    private static string Instructions(MonthlyReportDto report, string? userName)
+    private static string Instructions(MonthlyReportDto report, string? userName, string? journal)
     {
+        var journalFacts = journal is null
+            ? ""
+            : $"""
+
+              O usuário também mantém o diário de emagrecimento. O mês do diário, já calculado (dias sem registro não
+              são dias ruins: as médias valem só para os dias registrados):
+              {journal}
+              Inclua no resumo duas ou três frases sobre o diário: como o peso se moveu (pela média das pesagens, nunca
+              por um dia), como foi a alimentação e o treino, e o que isso quer dizer para a meta de peso. Sem culpa por
+              dias acima do planejado. O insight pode vir do diário, se os números mostrarem um padrão.
+              """;
+
         object Period(PeriodStatsDto p) => new
         {
             de = p.From.ToString("yyyy-MM-dd"),
@@ -78,7 +95,8 @@ internal sealed class SummaryWriter(IChatClient chatClient)
                 naoFeitos = g.Missed,
                 semConfirmacao = g.Unconfirmed,
                 percentualFeito = g.DonePercent,
-                totais = g.Totals.Select(t => new { unidade = t.Unit, total = t.Total }),
+                // A weight reported twenty times is not a total of kilos: those units are left to the journal's facts.
+                totais = g.Totals.Where(t => !StateUnits.Is(t.Unit)).Select(t => new { unidade = t.Unit, total = t.Total }),
                 porDiaDaSemana = g.MainUnit is null && g.Done == 0
                     ? null
                     : g.ByWeekday.Select(d => new { dia = DayName(d.IsoDay), diasFeitos = d.DoneDays, quantidade = d.Amount, unidade = g.MainUnit }),
@@ -111,11 +129,12 @@ internal sealed class SummaryWriter(IChatClient chatClient)
             Discord{(userName is null ? "" : $", com {userName}")}. Você vai mandar, por iniciativa própria, o resumo do
             mês que terminou. Os números (JSON), já contados:
             {JsonSerializer.Serialize(facts, Json)}
+            {journalFacts}
 
             feitos, naoFeitos e semConfirmacao são dias. percentualFeito considera só os dias com resultado conhecido
             (feitos ÷ (feitos + naoFeitos)); os sem confirmação não contam nem como feitos nem como falhas.
 
-            message: o resumo, no estilo de chat, até {(report.Quarter is null ? 90 : 160)} palavras:
+            message: o resumo, no estilo de chat, até {(report.Quarter is null ? 90 : 160) + (journal is null ? 0 : 50)} palavras:
             - Comece pelo percentual do mês e uma frase positiva e encorajadora (ex.: "Você fez 80% do que foi proposto
               para este mês, isso é bom demais! Consistência é o que faz a diferença."). Sem percentual, fale do que foi feito.
             - Cite as metas com o que importa (use **negrito** no nome delas), valorizando a consistência e o progresso real.

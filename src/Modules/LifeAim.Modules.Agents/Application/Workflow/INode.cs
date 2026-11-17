@@ -30,8 +30,11 @@ internal interface INode
 internal sealed record NodeResult
 {
     private NodeResult(
-        bool expected, string? reply, Stage? nextStage, bool isGreeting = false, string? note = null, bool resumes = false)
+        bool expected, string? reply, Stage? nextStage, bool isGreeting = false, string? note = null, bool resumes = false,
+        bool isFitness = false, bool isGoalTalk = false)
     {
+        IsFitness = isFitness;
+        IsGoalTalk = isGoalTalk;
         Expected = expected;
         Reply = reply;
         NextStage = nextStage;
@@ -58,6 +61,18 @@ internal sealed record NodeResult
     /// <summary>The message was only a greeting: the workflow greets back and repeats the pending question.</summary>
     public bool IsGreeting { get; }
 
+    /// <summary>
+    /// The message belongs to the weight-loss journal (a meal, the weight, a workout, a question about food): the
+    /// workflow hands it to the fitness agent, without asking the path classifier first.
+    /// </summary>
+    public bool IsFitness { get; }
+
+    /// <summary>
+    /// The message is about a goal already saved (see, change, report progress): the workflow hands it to the goals
+    /// agent, without asking the path classifier first.
+    /// </summary>
+    public bool IsGoalTalk { get; }
+
     public string? Reply { get; }
 
     /// <summary>The edge to follow; null keeps the conversation at the same stage.</summary>
@@ -71,6 +86,10 @@ internal sealed record NodeResult
     public static NodeResult NotExpected { get; } = new(false, null, null);
 
     public static NodeResult Greeting { get; } = new(false, null, null, isGreeting: true);
+
+    public static NodeResult Fitness { get; } = new(false, null, null, isFitness: true);
+
+    public static NodeResult GoalTalk { get; } = new(false, null, null, isGoalTalk: true);
 
     /// <summary>
     /// The node acted (e.g. took an ignored confirmation as a "sim" and saved) and moved the conversation to

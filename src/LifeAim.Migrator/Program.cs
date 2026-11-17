@@ -5,6 +5,7 @@ using DbUp;
 using LifeAim.BuildingBlocks;
 using LifeAim.Modules.Agents;
 using LifeAim.Modules.Communication;
+using LifeAim.Modules.Fitness;
 using LifeAim.Modules.Goals;
 using LifeAim.Modules.Planning;
 using LifeAim.Modules.Progress;
@@ -21,6 +22,7 @@ ModuleMigrations[] modules =
     ProgressModule.Migrations,
     PlanningModule.Migrations,
     ReportingModule.Migrations,
+    FitnessModule.Migrations,
 ];
 
 // Locally: User Secrets (shared with the API). On the VPS: ConnectionStrings__LifeAim.

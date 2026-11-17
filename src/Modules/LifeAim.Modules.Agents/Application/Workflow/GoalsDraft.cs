@@ -39,6 +39,10 @@ namespace LifeAim.Modules.Agents.Application.Workflow;
 /// the place of the old one.
 /// </param>
 /// <param name="ResumeGoalId">While asking whether a paused goal comes back (Stage.ResumeGoal): which one.</param>
+/// <param name="FitnessTalkAt">
+/// When the fitness agent last answered. While that is recent and the user is between tasks, the next message goes
+/// straight to it (a day of the journal is many messages in a row), and it hands back what is not for it.
+/// </param>
 internal sealed record GoalsDraft(
     DateOnly? Horizon,
     IReadOnlyList<GoalDraft> Goals,
@@ -57,7 +61,8 @@ internal sealed record GoalsDraft(
     Guid? BalanceReviewId = null,
     string? CancelReason = null,
     GoalDraft? Replacement = null,
-    Guid? ResumeGoalId = null)
+    Guid? ResumeGoalId = null,
+    DateTimeOffset? FitnessTalkAt = null)
 {
     public static GoalsDraft Empty(DateOnly? horizon) => new(horizon, [], []);
 }

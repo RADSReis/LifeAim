@@ -105,10 +105,16 @@ internal sealed class PathClassifier(IChatClient chatClient)
             case "goal_talk" when context.SavedGoals.Count + context.PausedGoals.Count > 0:
                 return new PathDecision(PathKind.GoalTalk, null, null, null, reason);
 
+            case "fitness_talk" when OffersFitness(context):
+                return new PathDecision(PathKind.FitnessTalk, null, null, null, reason);
+
             default:
                 return PathDecision.OutOfScope(reason);
         }
     }
+
+    /// <summary>The weight-loss journal is open to someone with an active goal about weight or training (its specialty).</summary>
+    public static bool OffersFitness(ConversationContext context) => context.FitnessActive;
 
     /// <summary>True when the code allows the jump the AI chose.</summary>
     public static bool IsAllowed(Stage from, Stage to) =>
@@ -133,7 +139,19 @@ internal sealed class PathClassifier(IChatClient chatClient)
                 peso", "quais são minhas metas?", "como estou na leitura?"), alterar (nome, quantidade, prazo, valores,
                 dias ou horários do plano), pausar, retomar, cancelar, excluir ou trocar uma meta por outra, ver as metas
                 pausadas ou encerradas, ou registrar progresso ("hoje li 10 páginas",
-                "corri 5 km ontem", "pesei 92 kg"). Prefira goal_talk a goto para esses pedidos.
+                "corri 5 km ontem"). Prefira goal_talk a goto para esses pedidos.
+              """;
+
+        var fitnessTalk = !OffersFitness(context)
+            ? ""
+            : """
+              - "fitness_talk": a mensagem é do diário de emagrecimento do dia a dia: o que comeu ou vai comer, calorias,
+                proteínas, o peso ou as medidas do dia ("pesei 92 kg", "abdominal 110"), bioimpedância, um treino feito
+                (duração, calorias gastas), fome, dúvidas de alimentação ou dieta ("quantas torradas posso comer?"),
+                valores nutricionais de um alimento, pedir o resumo do dia ou da semana de alimentação, corrigir uma
+                refeição registrada, responder a um lembrete do diário ("tomei a vitamina") ou ligar, mudar e desligar
+                lembretes do diário ("me lembra de pesar às 8h"). Prefira fitness_talk a goal_talk para comida, peso, medidas e treino. Mudar a meta
+                em si (prazo, peso alvo da meta, pausar, cancelar) continua sendo goal_talk.
               """;
 
         return $"""
@@ -154,8 +172,9 @@ internal sealed class PathClassifier(IChatClient chatClient)
             - "clarify": a mensagem tenta responder a pergunta da etapa atual, mas ficou confusa ou incompleta.
               Escreva em clarification UMA frase curta, em português, dizendo o que o Pippin precisa (sem repetir a pergunta).
             {goalTalk}
-            - "out_of_scope": um pedido ou assunto sem relação com as metas do usuário (piada, previsão do tempo,
-              receita, perguntas gerais).
+            {fitnessTalk}
+            - "out_of_scope": um pedido ou assunto sem relação com as metas do usuário nem com o diário de
+              emagrecimento (piada, previsão do tempo, perguntas gerais).
 
             goalNumber: o número da meta salva da lista acima, quando o caminho pede uma meta; senão null.
             reason: uma frase curta explicando a escolha (vai para o log, o usuário não vê).
@@ -189,6 +208,9 @@ internal enum PathKind
 
     /// <summary>A conversation about the saved goals: the goals agent (with tools) answers it.</summary>
     GoalTalk,
+
+    /// <summary>The weight-loss journal (food, weight, workouts): the fitness agent (with tools) answers it.</summary>
+    FitnessTalk,
 
     OutOfScope,
 }

@@ -1,3 +1,5 @@
+using LifeAim.Modules.Agents.Application.Fitness;
+using LifeAim.Modules.Fitness.Contracts;
 using LifeAim.Modules.Agents.Application.Nodes;
 using LifeAim.Modules.Agents.Application.Workflow;
 using LifeAim.Modules.Agents.Infrastructure.Ai;
@@ -20,6 +22,7 @@ internal sealed class MonthlySummaryJob(
     IReportingService reporting,
     IConversationStore store,
     SummaryWriter writer,
+    IFitnessJournal journal,
     PippinWorkflow workflow,
     TimeProvider timeProvider,
     ILogger<MonthlySummaryJob> logger) : IJob
@@ -83,7 +86,12 @@ internal sealed class MonthlySummaryJob(
             return false;
         }
 
-        var written = await writer.WriteAsync(report, state.UserName, cancellationToken);
+        // The month of the weight-loss journal, for someone who keeps it.
+        var monthStart = new DateOnly(month.Year, month.Month, 1);
+        var days = await journal.ListDaysAsync(userId, monthStart, monthStart.AddMonths(1).AddDays(-1), cancellationToken);
+        var journalFacts = FitnessPeriod.Summary(days, await journal.GetProfileAsync(userId, cancellationToken));
+
+        var written = await writer.WriteAsync(report, state.UserName, cancellationToken, journalFacts);
         var summaryId = Guid.CreateVersion7();
         var sent = await workflow.SendSummaryAsync(
             userId,

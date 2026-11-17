@@ -77,6 +77,13 @@ internal sealed class CheckInNode(
             return NodeResult.NotExpected;
         }
 
+        // Journal data (what was eaten, the weight, a workout told with its numbers) goes to the fitness agent, which
+        // records the workout in the journal AND as progress of its goal, answering this follow-up on the way.
+        if (answer.Decision?.Trim().ToLowerInvariant() == "fitness")
+        {
+            return NodeResult.Fitness;
+        }
+
         var outcomes = (answer.Items ?? [])
             .Where(i => i.Number is { } n && n >= 1 && n <= open.Count)
             .Where(i => i.Outcome?.Trim().ToLowerInvariant() is "done" or "not_done")
@@ -150,8 +157,11 @@ internal sealed class CheckInNode(
               "done" (fez; amount e unit se ele disse quanto, e note com o que fez em poucas palavras, na terceira pessoa,
               como "leu 15 páginas") ou "not_done" (não fez; reason com o motivo nas palavras dele, se disse).
               Não inclua atividades de que ele não falou: elas continuam sem confirmação, o que é diferente de não feita.
-            - decision: "report" se falou de alguma atividade; "greeting" se foi só um cumprimento; "other" se a mensagem
-              é sobre outro assunto (então items fica vazio e reply null).
+            - decision: "report" se falou de alguma atividade; "greeting" se foi só um cumprimento; "fitness" se a
+              mensagem traz dados do diário de emagrecimento (o que comeu ou vai comer, calorias, peso, medidas, fome,
+              dúvida de alimentação, ou um treino contado com detalhes como duração de cada exercício ou calorias
+              gastas: "30 min de musculação e 30 de elíptico, 488 kcal"); "other" se é sobre outro assunto. Com
+              "fitness" ou "other", items fica vazio e reply null. Um simples "fui" ou "não fui" é "report".
             - reply: a sua resposta, curta (até 60 palavras), no estilo de chat:
               - Feito: comemore e valorize a consistência. Se fez bem mais que o planejado (2x ou mais), elogie primeiro e
                 lembre com leveza, em uma frase, que distribuir o esforço ao longo dos dias costuma funcionar melhor para

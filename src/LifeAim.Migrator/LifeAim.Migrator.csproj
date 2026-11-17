@@ -22,6 +22,7 @@
     <ProjectReference Include="..\Modules\LifeAim.Modules.Planning\LifeAim.Modules.Planning.csproj" />
     <ProjectReference Include="..\Modules\LifeAim.Modules.Progress\LifeAim.Modules.Progress.csproj" />
     <ProjectReference Include="..\Modules\LifeAim.Modules.Reporting\LifeAim.Modules.Reporting.csproj" />
+    <ProjectReference Include="..\Modules\LifeAim.Modules.Fitness\LifeAim.Modules.Fitness.csproj" />
   </ItemGroup>
 
 </Project>

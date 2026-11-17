@@ -1,6 +1,7 @@
 ﻿using LifeAim.BuildingBlocks;
 using LifeAim.Modules.Agents.Application.Agent;
 using LifeAim.Modules.Agents.Application.Balance;
+using LifeAim.Modules.Agents.Application.Fitness;
 using LifeAim.Modules.Agents.Application.FollowUp;
 using LifeAim.Modules.Agents.Application.Nodes;
 using LifeAim.Modules.Agents.Application.Pauses;
@@ -38,6 +39,8 @@ public static class AgentsModule
         else
         {
             services.AddChatClient(new ChatClient(openAI.Model, openAI.ApiKey).AsIChatClient())
+                .Use((inner, provider) => new PippinChatClient(
+                    inner, openAI, provider.GetRequiredService<Microsoft.Extensions.Logging.ILogger<PippinChatClient>>()))
                 .UseLogging();
         }
 
@@ -63,6 +66,10 @@ public static class AgentsModule
 
         // The first agent with tools: conversations about saved goals (consult, change, cancel, record progress).
         services.AddSingleton<GoalsAgent>();
+
+        // The first specialty: the weight-loss conversation (food, weight, workouts), kept in the Fitness module.
+        services.AddSingleton<FitnessAgent>();
+        services.AddSingleton<FitnessReminderWriter>();
         services.AddSingleton<PippinWorkflow>();
         services.AddSingleton<IPippin>(sp => sp.GetRequiredService<PippinWorkflow>());
 
@@ -115,6 +122,15 @@ public static class AgentsModule
                 .WithIdentity($"{GoalBalanceJob.Key.Name}-trigger", GoalBalanceJob.Key.Group)
                 .StartNow()
                 .WithSimpleSchedule(schedule => schedule.WithIntervalInMinutes(30).RepeatForever()));
+
+            // The journal's reminders (weigh-in, no record yet, summary of the day, free reminders), each at the time
+            // the user chose.
+            quartz.AddJob<FitnessReminderJob>(job => job.WithIdentity(FitnessReminderJob.Key));
+            quartz.AddTrigger(trigger => trigger
+                .ForJob(FitnessReminderJob.Key)
+                .WithIdentity($"{FitnessReminderJob.Key.Name}-trigger", FitnessReminderJob.Key.Group)
+                .StartNow()
+                .WithSimpleSchedule(schedule => schedule.WithIntervalInMinutes(5).RepeatForever()));
 
             // Funcionalidade 6: a pause that reaches the day the user chose → Pippin asks whether the goal comes back.
             quartz.AddJob<PausedGoalsJob>(job => job.WithIdentity(PausedGoalsJob.Key));

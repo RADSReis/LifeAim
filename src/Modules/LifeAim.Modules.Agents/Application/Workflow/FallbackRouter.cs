@@ -8,12 +8,12 @@ namespace LifeAim.Modules.Agents.Application.Workflow;
 /// </summary>
 internal sealed class FallbackRouter
 {
-    private static readonly string[] NoFeatureReplies =
-    [
-        "Hmm, procurei aqui nos meus bolsos e não achei essa funcionalidade. 🕵️",
-        "Isso aí ainda não está no meu repertório. Juro que não é preguiça! 😅",
-        "Vasculhei meu manual de instruções e essa página não existe… 📖❌",
-    ];
+    /// <summary>
+    /// One plain sentence, always the same: what Pippin does. (It used to be one of three jokes drawn at random, which
+    /// read as a broken bot the third time in a day.)
+    /// </summary>
+    public const string OutOfScope =
+        "Isso eu ainda não faço. 🙂 Eu cuido das suas metas e do seu diário de alimentação, peso e treino.";
 
     public const string BackToQuestion = "Mas voltando ao que eu tinha perguntado: ";
 
@@ -30,7 +30,7 @@ internal sealed class FallbackRouter
 
     public NodeResult Route(string? pendingQuestion)
     {
-        var reply = NoFeatureReplies[Random.Shared.Next(NoFeatureReplies.Length)];
+        var reply = OutOfScope;
 
         if (pendingQuestion is not null)
         {

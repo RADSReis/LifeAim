@@ -1,6 +1,7 @@
 using LifeAim.BuildingBlocks.Database;
 using LifeAim.Modules.Agents;
 using LifeAim.Modules.Communication;
+using LifeAim.Modules.Fitness;
 using LifeAim.Modules.Goals;
 using LifeAim.Modules.Planning;
 using LifeAim.Modules.Progress;
@@ -18,6 +19,7 @@ builder.Services
     .AddGoalsModule()
     .AddPlanningModule()
     .AddProgressModule()
+    .AddFitnessModule()
     .AddAgentsModule(builder.Configuration)
     .AddCommunicationModule(builder.Configuration)
     .AddReportingModule();

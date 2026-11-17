@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Modules\LifeAim.Modules.Agents\LifeAim.Modules.Agents.csproj" />
+    <ProjectReference Include="..\..\src\LifeAim.Importer\LifeAim.Importer.csproj" />
   </ItemGroup>
 
 </Project>

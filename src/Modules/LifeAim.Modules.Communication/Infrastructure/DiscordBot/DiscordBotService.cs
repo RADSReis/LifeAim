@@ -111,8 +111,12 @@ internal sealed class DiscordBotService(
             var userId = await channelUsers.GetOrCreateAsync(
                 Channel, message.Author.Id.ToString(), displayName, _stoppingToken);
 
-            var reply = await pippin.ReplyAsync(new PippinMessage(userId, displayName, message.Content), _stoppingToken);
-            await message.Channel.SendMessageAsync(reply);
+            var images = await DownloadImagesAsync(message, _stoppingToken);
+            var reply = await pippin.ReplyAsync(new PippinMessage(userId, displayName, message.Content, images), _stoppingToken);
+            foreach (var part in DiscordText.Split(reply))
+            {
+                await message.Channel.SendMessageAsync(part);
+            }
         }
         catch (Exception ex)
         {
@@ -126,6 +130,33 @@ internal sealed class DiscordBotService(
                 logger.LogError(sendEx, "Failed to tell the user that the answer failed.");
             }
         }
+    }
+
+    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(20) };
+
+    /// <summary>
+    /// The photos attached to a DM (a plate, a nutrition label), as bytes for Pippin. Only images, only a few, only
+    /// small ones; one that cannot be downloaded is left out and the message is answered without it.
+    /// </summary>
+    private async Task<IReadOnlyList<PippinImage>> DownloadImagesAsync(SocketMessage message, CancellationToken cancellationToken)
+    {
+        var images = new List<PippinImage>();
+        foreach (var attachment in message.Attachments
+                     .Where(a => PippinImage.IsSupported(a.ContentType) && a.Size <= PippinImage.MaxBytes)
+                     .Take(PippinImage.MaxPerMessage))
+        {
+            try
+            {
+                var data = await Http.GetByteArrayAsync(attachment.Url, cancellationToken);
+                images.Add(new PippinImage(data, attachment.ContentType.Split(';')[0].Trim().ToLowerInvariant()));
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+            {
+                logger.LogWarning(ex, "A photo attached to a DM could not be downloaded.");
+            }
+        }
+
+        return images;
     }
 
     // Sends Discord.Net's own log messages to the regular .NET logger (and so to `docker logs`).

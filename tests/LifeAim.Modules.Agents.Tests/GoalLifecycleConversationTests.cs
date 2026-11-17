@@ -1,4 +1,5 @@
 using LifeAim.Modules.Agents.Application.Agent;
+using LifeAim.Modules.Agents.Application.Fitness;
 using LifeAim.Modules.Agents.Application.Nodes;
 using LifeAim.Modules.Agents.Application.Pauses;
 using LifeAim.Modules.Agents.Application.Workflow;
@@ -291,6 +292,7 @@ public class GoalLifecycleConversationTests
             new GreetingReply(),
             new PathClassifier(chat),
             new GoalsAgent(chat, _goals, _progress, _checkIns, _time, NullLoggerFactory.Instance),
+            new FitnessAgent(chat, new FakeFitnessJournal(), new FakeFitnessReminders(), _goals, _progress, _checkIns, _time, NullLoggerFactory.Instance),
             _goals,
             _channel,
             NullLogger<PippinWorkflow>.Instance);

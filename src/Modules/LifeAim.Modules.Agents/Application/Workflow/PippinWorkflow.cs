@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using LifeAim.Modules.Agents.Application.Agent;
+using LifeAim.Modules.Agents.Application.Fitness;
 using LifeAim.Modules.Agents.Application.Nodes;
 using LifeAim.Modules.Agents.Application.Planning;
 using LifeAim.Modules.Agents.Contracts;
@@ -12,13 +13,18 @@ namespace LifeAim.Modules.Agents.Application.Workflow;
 /// <summary>
 /// Pippin's hand-made workflow engine, run once per incoming message:
 /// load the context → run the node of the current stage → if the message was not expected, hand it
-/// to the path classifier (another stage, the goals agent, or the router) → follow the edge (next stage) →
+/// to the path classifier (another stage, the goals agent, the fitness agent, or the router) → follow the edge (next stage) →
 /// save the context and both messages → reply.
 /// </summary>
 internal sealed class PippinWorkflow : IPippin
 {
     /// <summary>How many past messages each node gets; the rest stays in the database only.</summary>
     private const int HistorySize = 20;
+
+    /// <summary>Someone tells a meal or a weight without a goal that opens the journal: how to get it.</summary>
+    public const string FitnessNeedsAGoal =
+        "Eu acompanho alimentação, peso e treino no diário de quem tem uma meta de peso ou de treino. " +
+        "Quer criar a sua? É só me dizer, por exemplo: \"quero chegar a 84 kg até dezembro\" ou \"academia 3 vezes por semana\".";
 
     private const string NoBrainReply =
         "Estou sem o meu cérebro de IA configurado agora 🧠🔌. Assim que ele for ligado, eu continuo daqui!";
@@ -32,6 +38,7 @@ internal sealed class PippinWorkflow : IPippin
     private readonly GreetingReply _greeting;
     private readonly PathClassifier _classifier;
     private readonly GoalsAgent _agent;
+    private readonly FitnessAgent _fitness;
     private readonly IGoalService _goals;
     private readonly IPippinChannel _channel;
     private readonly ILogger<PippinWorkflow> _logger;
@@ -44,6 +51,7 @@ internal sealed class PippinWorkflow : IPippin
         GreetingReply greeting,
         PathClassifier classifier,
         GoalsAgent agent,
+        FitnessAgent fitness,
         IGoalService goals,
         IPippinChannel channel,
         ILogger<PippinWorkflow> logger)
@@ -54,6 +62,7 @@ internal sealed class PippinWorkflow : IPippin
         _greeting = greeting;
         _classifier = classifier;
         _agent = agent;
+        _fitness = fitness;
         _goals = goals;
         _logger = logger;
         _nodes = nodes.ToDictionary(node => node.Stage);
@@ -67,16 +76,20 @@ internal sealed class PippinWorkflow : IPippin
         {
             // 1. Load the context (the "checkpoint").
             var state = await _store.LoadAsync(message.UserId, cancellationToken);
+            IReadOnlyList<GoalDto> saved = state.Stage == Stage.Greeting ? [] : await _goals.ListAsync(message.UserId, cancellationToken);
             var context = new ConversationContext
             {
                 UserId = message.UserId,
                 DisplayName = message.DisplayName,
                 IncomingText = message.Text,
+                Images = (message.Images ?? []).Where(i => PippinImage.IsSupported(i.MediaType) && i.Data.Length is > 0 and <= PippinImage.MaxBytes)
+                    .Take(PippinImage.MaxPerMessage).ToList(),
                 History = await _store.RecentMessagesAsync(message.UserId, HistorySize, cancellationToken),
                 Stage = state.Stage,
                 UserName = state.UserName,
                 Draft = state.Draft,
-                SavedGoals = state.Stage == Stage.Greeting ? [] : await _goals.ListAsync(message.UserId, cancellationToken),
+                SavedGoals = saved,
+                FitnessActive = saved.Count > 0 && await _fitness.IsActiveAsync(message.UserId, saved, cancellationToken),
                 PausedGoals = state.Stage == Stage.Greeting
                     ? []
                     : (await _goals.ListHistoryAsync(message.UserId, cancellationToken)).Where(g => g.Status == GoalStatus.Paused).ToList(),
@@ -101,10 +114,15 @@ internal sealed class PippinWorkflow : IPippin
             }
 
             // 5. Save the context and the turn.
+            // The photos are not kept: the history only says that there were some.
+            var written = context.Images.Count == 0
+                ? message.Text
+                : $"{message.Text}\n[enviou {context.Images.Count} foto(s)]".Trim();
+
             await _store.SaveTurnAsync(
                 message.UserId,
                 new ConversationState(context.Stage, context.UserName, context.Draft),
-                message.Text,
+                written,
                 reply,
                 stageOfThisMessage,
                 cancellationToken);
@@ -189,6 +207,46 @@ internal sealed class PippinWorkflow : IPippin
             await _store.SaveProactiveAsync(
                 userId, state with { Stage = Stage.ResumeGoal, Draft = draft }, text, state.Stage, cancellationToken);
             _logger.LogInformation("Pippin asked whether goal {GoalId} comes back: {From} → {To}", goalId, state.Stage, Stage.ResumeGoal);
+            return true;
+        }
+        finally
+        {
+            userLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// A reminder of the journal goes out between tasks, or on top of an invitation or a follow-up nobody answered;
+    /// never in the middle of a cadastro, a detailing or a review.
+    /// </summary>
+    public static bool CanSendReminder(Stage stage) =>
+        stage is Stage.CollectGoals or Stage.CheckIn or Stage.SummaryInsight or Stage.ResumeGoal;
+
+    /// <summary>
+    /// Pippin sends, on his own, a message that waits for nothing (a reminder of the journal). Under the per-user
+    /// lock: the stage is checked again, the message sent, <paramref name="record"/> saves that it was, and the
+    /// message joins the history. The stage and the draft stay as they are. False, with nothing recorded, when the
+    /// user is busy or the message could not be delivered.
+    /// </summary>
+    public async Task<bool> SendNoteAsync(
+        Guid userId,
+        string text,
+        Func<CancellationToken, Task> record,
+        CancellationToken cancellationToken)
+    {
+        var userLock = UserLocks.GetOrAdd(userId, _ => new SemaphoreSlim(1, 1));
+        await userLock.WaitAsync(cancellationToken);
+        try
+        {
+            var state = await _store.LoadAsync(userId, cancellationToken);
+            if (!CanSendReminder(state.Stage) || !await _channel.SendAsync(userId, text, cancellationToken))
+            {
+                return false;
+            }
+
+            await record(cancellationToken);
+            await _store.SaveProactiveAsync(userId, state, text, state.Stage, cancellationToken);
+            _logger.LogInformation("Pippin sent a journal reminder at {Stage}", state.Stage);
             return true;
         }
         finally
@@ -340,6 +398,21 @@ internal sealed class PippinWorkflow : IPippin
     {
         try
         {
+            // A photo (a plate, a nutrition label, the scale) is for the journal, whatever the stage: only the fitness
+            // agent can see it.
+            if (context.Images.Count > 0 && PathClassifier.OffersFitness(context))
+            {
+                return (await TalkAboutFitnessAsync(context, cancellationToken))!;
+            }
+
+            // Between tasks, with the journal answered a moment ago: a day of meals is many messages in a row, so this
+            // one goes straight to the fitness agent, without the triage. What is not for it comes back here.
+            if (context.Stage == Stage.CollectGoals && context.FitnessActive && _fitness.IsRecent(context.Draft?.FitnessTalkAt)
+                && await TalkAboutFitnessAsync(context, cancellationToken, canHandBack: true) is { } answered)
+            {
+                return answered;
+            }
+
             var node = _nodes[context.Stage];
             var result = await node.RunAsync(context, cancellationToken);
             if (result.Expected)
@@ -364,9 +437,12 @@ internal sealed class PippinWorkflow : IPippin
                 }
             }
 
-            // A greeting asks for nothing: greet back. Anything else unexpected → the path classifier decides.
-            var handled = result.IsGreeting
-                ? NodeResult.Answer(_greeting.Reply(context, node.PendingQuestion(context)))
+            // A greeting asks for nothing: greet back. The node recognized the weight-loss journal: its agent answers.
+            // Anything else unexpected → the path classifier decides.
+            var handled = result.IsGreeting ? NodeResult.Answer(await GreetAsync(context, node, cancellationToken))
+                : result.IsFitness && PathClassifier.OffersFitness(context) ? (await TalkAboutFitnessAsync(context, cancellationToken))!
+                : result.IsFitness ? NodeResult.Answer(WithPendingQuestion(FitnessNeedsAGoal, context))
+                : result.IsGoalTalk ? await TalkAboutGoalsAsync(context, cancellationToken)
                 : await FindPathAsync(context, node, cancellationToken);
 
             return note is null
@@ -413,6 +489,9 @@ internal sealed class PippinWorkflow : IPippin
             case PathKind.GoalTalk:
                 return await TalkAboutGoalsAsync(context, cancellationToken);
 
+            case PathKind.FitnessTalk:
+                return (await TalkAboutFitnessAsync(context, cancellationToken))!;
+
             default:
                 return _router.Route(pending);
         }
@@ -454,6 +533,28 @@ internal sealed class PippinWorkflow : IPippin
         return NodeResult.Answer(WithPendingQuestion(reply, context));
     }
 
+    // The fitness agent answers (with its tools) and keeps the journal. The stage does not change. Through a day the
+    // user sends many of these, so the pending question is repeated only where a cadastro waits for an answer: an
+    // invitation or a follow-up nobody answered is not asked again after every meal.
+    // Null only with canHandBack, when the agent said the message is not for the journal.
+    private async Task<NodeResult?> TalkAboutFitnessAsync(
+        ConversationContext context, CancellationToken cancellationToken, bool canHandBack = false)
+    {
+        var answer = await _fitness.ReplyAsync(context, cancellationToken, canHandBack);
+        if (answer.HandedBack)
+        {
+            context.Draft = context.Draft is null ? null : context.Draft with { FitnessTalkAt = null };
+            return null;
+        }
+
+        context.Draft = (context.Draft ?? GoalsDraft.Empty(null)) with { FitnessTalkAt = answer.At };
+        var reply = string.IsNullOrWhiteSpace(answer.Text) ? "Acho que não entendi direito. 🤔" : answer.Text;
+
+        var waitsForAnAnswer = context.Stage is Stage.ConfirmGoals or Stage.DetailGoals or Stage.ConfirmCancelGoal
+            or Stage.ChoosePlanGoal or Stage.RefinePlanGoal;
+        return NodeResult.Answer(waitsForAnAnswer ? WithPendingQuestion(reply, context) : reply);
+    }
+
     /// <summary>
     /// Ends the reply with the pending question of the current stage ("Voltando ao que eu tinha perguntado: …").
     /// Not at CollectGoals: between tasks its question is only "quer adicionar mais metas?", which would close every
@@ -462,6 +563,35 @@ internal sealed class PippinWorkflow : IPippin
     private string WithPendingQuestion(string reply, ConversationContext context)
     {
         var pending = context.Stage == Stage.CollectGoals ? null : _nodes[context.Stage].PendingQuestion(context);
+        pending = NotJustAsked(pending, context);
         return pending is null ? reply : $"{reply}\n\n{FallbackRouter.BackToQuestion}{pending}";
+    }
+
+    /// <summary>How many of Pippin's last messages are checked before the pending question is repeated.</summary>
+    private const int RepeatQuestionAfter = 2;
+
+    /// <summary>
+    /// The pending question, or null when one of Pippin's last messages already ended with it: when an agent answers
+    /// several messages in a row (three meals told in the middle of a cadastro), the user reads the question once, not
+    /// after every answer. The router still repeats it every time: there the user got no answer at all.
+    /// </summary>
+    private static string? NotJustAsked(string? pending, ConversationContext context) =>
+        pending is not null && context.History
+            .Where(turn => turn.Role == ConversationRole.Assistant)
+            .TakeLast(RepeatQuestionAfter)
+            .Any(turn => turn.Content.Contains(FallbackRouter.BackToQuestion + pending, StringComparison.Ordinal))
+            ? null
+            : pending;
+
+    // Between tasks, someone who keeps the journal is greeted with the day so far instead of the list of goals.
+    private async Task<string> GreetAsync(ConversationContext context, INode node, CancellationToken cancellationToken)
+    {
+        if (context.Stage == Stage.CollectGoals && await _fitness.DayStatusAsync(context.UserId, cancellationToken) is { } status)
+        {
+            return $"{(context.UserName is { } name ? $"Opa! Olá, {name}! 😊" : "Oi! 😊")}\n\n{status}\n\n" +
+                   "Me conta a próxima refeição, o peso ou o treino, ou diga de qual meta quer falar.";
+        }
+
+        return _greeting.Reply(context, node.PendingQuestion(context));
     }
 }

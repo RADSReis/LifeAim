@@ -32,7 +32,11 @@ internal sealed class DiscordConnection(IOptions<DiscordOptions> options)
         }
 
         var channel = await user.CreateDMChannelAsync(requestOptions);
-        await channel.SendMessageAsync(text, options: requestOptions);
+        foreach (var part in DiscordText.Split(text))
+        {
+            await channel.SendMessageAsync(part, options: requestOptions);
+        }
+
         return true;
     }
 }

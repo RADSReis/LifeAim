@@ -348,7 +348,7 @@ internal sealed class GoalTools(
 
     private static string Totals(IReadOnlyList<ProgressEntryDto> entries)
     {
-        var totals = entries.Where(e => e.Amount is not null && e.Unit is not null)
+        var totals = entries.Where(e => e.Amount is not null && e.Unit is not null && !StateUnits.Is(e.Unit))
             .GroupBy(e => e.Unit!)
             .Select(g => $"{GoalExtraction.Number(g.Sum(e => e.Amount!.Value))} {g.Key}")
             .ToList();
@@ -451,6 +451,17 @@ internal sealed class GoalTools(
 
         foreach (var byUnit in entries.Where(e => e.Amount is not null).GroupBy(e => e.Unit ?? ""))
         {
+            // A weight or a measure is where the user is, not something done: first, last and change, never a sum.
+            if (StateUnits.Is(byUnit.Key))
+            {
+                var (first, last) = (byUnit.Last(), byUnit.First()); // newest first
+                text.Append("\nEm ").Append(byUnit.Key).Append(": primeiro registro ")
+                    .Append(GoalExtraction.Number(first.Amount!.Value)).Append(" em ").Append(first.OccurredOn.ToString("dd/MM/yyyy", PtBr))
+                    .Append(", último ").Append(GoalExtraction.Number(last.Amount!.Value)).Append(" em ").Append(last.OccurredOn.ToString("dd/MM/yyyy", PtBr))
+                    .Append(" (variação: ").Append((last.Amount.Value - first.Amount.Value).ToString("+0.##;-0.##;0", PtBr)).Append(')');
+                continue;
+            }
+
             var lastWeek = byUnit.Where(e => e.OccurredOn > today.AddDays(-7)).Sum(e => e.Amount!.Value);
             text.Append("\nTotal em ").Append(byUnit.Key == "" ? "(sem unidade)" : byUnit.Key).Append(": ")
                 .Append(GoalExtraction.Number(byUnit.Sum(e => e.Amount!.Value)))

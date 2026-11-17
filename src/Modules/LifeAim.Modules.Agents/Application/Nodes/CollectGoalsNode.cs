@@ -53,6 +53,24 @@ internal sealed class CollectGoalsNode(IChatClient chatClient, TimeProvider time
             return NodeResult.Answer(GoalExtraction.Confirmation(context.Draft), nextStage: Stage.ConfirmGoals);
         }
 
+        // The weight-loss journal ("almoço: 100 g de arroz...", "estou com 94,5 kg"): straight to its agent.
+        if (answer.AboutFitness)
+        {
+            return NodeResult.Fitness;
+        }
+
+        // Deepening a saved goal ("vamos detalhar a meta de leitura") is a jump to DetailGoals: the router decides it.
+        if (answer.DetailSavedGoal && context.SavedGoals.Count > 0)
+        {
+            return NodeResult.NotExpected; // → the router (goto DetailGoals)
+        }
+
+        // About a goal already saved ("como estou na leitura?", "hoje li 10 páginas"): straight to the goals agent.
+        if (answer.AboutSavedGoal && context.SavedGoals.Count + context.PausedGoals.Count > 0)
+        {
+            return NodeResult.GoalTalk;
+        }
+
         if (answer.Finished)
         {
             return NodeResult.Answer(
@@ -107,6 +125,18 @@ internal sealed class CollectGoalsNode(IChatClient chatClient, TimeProvider time
               "até junho" → último dia de junho). null se o usuário não disse.
             - goals: uma entrada por meta mencionada (lista vazia se nenhuma).
             - doubts: siga as regras de dúvidas abaixo.
+            - aboutSavedGoal: true se a mensagem é sobre uma meta JÁ salva ou pausada: ver, consultar, mudar, pausar,
+              retomar, cancelar, trocar, ou contar um progresso dela ("hoje li 10 páginas"). Não vale para o diário
+              de emagrecimento (aboutFitness) nem para detalhar uma meta salva (detailSavedGoal).
+            - detailSavedGoal: true se o usuário quer detalhar, aprofundar ou montar o plano de uma meta JÁ salva
+              ("quero detalhar melhor a meta dos livros", "vamos aprofundar a meta de leitura"). Nesse caso
+              aboutSavedGoal é false.
+            - aboutFitness: true se a mensagem é do diário de emagrecimento do dia a dia: o que comeu ou vai comer,
+              calorias ou proteínas, o peso ou as medidas de hoje ("estou com 94,5 kg"), bioimpedância, um treino feito
+              com detalhes, fome, uma dúvida de alimentação ("quantas torradas posso comer?"), a resposta a um lembrete
+              do diário ("tomei a vitamina", "já me pesei") ou um pedido de lembrete do diário ("me lembra de pesar às
+              8h", "me manda o fechamento do dia às 21h30"). Isso NÃO é meta nova:
+              goals vazio e aboutGoals false. Um objetivo ("quero chegar a 84 kg até dezembro") é meta, não diário.
             - finished: true se o usuário diz que não quer cadastrar mais metas ("não", "é só isso", "por enquanto é isso").
 
             {GoalExtraction.GoalFieldRules}
@@ -122,5 +152,8 @@ internal sealed class CollectGoalsNode(IChatClient chatClient, TimeProvider time
         string? HorizonDate,
         List<ExtractedGoal>? Goals,
         List<ExtractedDoubt>? Doubts,
-        bool Finished);
+        bool Finished,
+        bool AboutFitness = false,
+        bool AboutSavedGoal = false,
+        bool DetailSavedGoal = false);
 }

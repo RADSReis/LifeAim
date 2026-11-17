@@ -33,6 +33,7 @@
     <ProjectReference Include="..\LifeAim.Modules.Progress\LifeAim.Modules.Progress.csproj" />
     <ProjectReference Include="..\LifeAim.Modules.Planning\LifeAim.Modules.Planning.csproj" />
     <ProjectReference Include="..\LifeAim.Modules.Reporting\LifeAim.Modules.Reporting.csproj" />
+    <ProjectReference Include="..\LifeAim.Modules.Fitness\LifeAim.Modules.Fitness.csproj" />
   </ItemGroup>
 
 </Project>

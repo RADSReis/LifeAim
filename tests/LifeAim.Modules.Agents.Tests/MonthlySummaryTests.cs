@@ -1,4 +1,5 @@
 using LifeAim.Modules.Agents.Application.Agent;
+using LifeAim.Modules.Agents.Application.Fitness;
 using LifeAim.Modules.Agents.Application.Nodes;
 using LifeAim.Modules.Agents.Application.Reports;
 using LifeAim.Modules.Agents.Application.Workflow;
@@ -59,6 +60,56 @@ public class MonthlySummaryTests
         Assert.Single(ai.Calls);
         Assert.Equal(Stage.CollectGoals, _store.States[UserId].Stage);
         Assert.Equal(summary.Message, _store.Messages.Last().Turn.Content);
+    }
+
+    [Fact]
+    public async Task The_month_of_the_weight_loss_journal_goes_into_the_summary_already_counted()
+    {
+        for (var day = 1; day <= 20; day++)
+        {
+            var date = new DateOnly(2026, 11, day);
+            await _journal.RecordBodyAsync(new Fitness.Contracts.RecordBodyRequest(UserId, date, WeightKg: 95m - day * 0.1m));
+            await _journal.AddMealAsync(new Fitness.Contracts.AddMealRequest(UserId, date, new TimeOnly(13, 0), "Almoço",
+                [new Fitness.Contracts.MealItemDto("Prato", null, null, 1900, 2100, 140, 150, null, null, Fitness.Contracts.NutritionSource.Estimate)]));
+        }
+
+        await _journal.SaveProfileAsync(new Fitness.Contracts.SaveProfileRequest(UserId, DailyEnergyKcal: 2350, TargetWeightKg: 84, ProteinTargetG: 150));
+        var ai = new FakeChatClient(Summary);
+
+        await Job(ai).RunAsync(CancellationToken.None);
+
+        var prompt = ai.Calls.Single()[0].Text;
+        Assert.Contains("- Dias com algum registro no diário: 20.", prompt);
+        Assert.Contains("- Alimentação registrada em 20 dia(s): média de ~1.900–2.100 kcal e proteína ~140–150 g por dia.", prompt);
+        Assert.Contains("- Desses dias, 20 fecharam em déficit, 0 em superávit e 0 perto da manutenção", prompt);
+        Assert.Contains("- Meta de proteína (150 g) alcançada em 20 desses dias.", prompt);
+        Assert.Contains("- Peso: 20 pesagens. Média das 7 primeiras: 94,6 kg; das 7 últimas: 93,3 kg (-1,3 kg). Menor do período: 93 kg. Peso alvo: 84 kg.", prompt);
+    }
+
+    [Fact]
+    public void A_period_with_almost_nothing_recorded_is_not_summarized()
+    {
+        var day = new Fitness.Contracts.FitnessDayDto(new DateOnly(2026, 11, 3), null, [], [], ["viagem"]);
+
+        Assert.Null(Application.Fitness.FitnessPeriod.Summary([day, day with { Day = day.Day.AddDays(1) }], null));
+    }
+
+    [Fact]
+    public async Task A_weight_reported_many_times_is_shown_as_first_last_and_change_never_as_a_sum()
+    {
+        var goal = _goals.Add(UserId, "Chegar a 84 kg", DateTimeOffset.UtcNow);
+        var progress = new FakeProgressService();
+        await progress.RecordAsync(new Progress.Contracts.RecordProgressRequest(UserId, goal.Id, new DateOnly(2026, 11, 2), "pesou 95 kg", 95, "kg"));
+        await progress.RecordAsync(new Progress.Contracts.RecordProgressRequest(UserId, goal.Id, new DateOnly(2026, 11, 20), "pesou 93,6 kg", 93.6m, "kg"));
+        var context = new ConversationContext
+        {
+            UserId = UserId, DisplayName = "rafael", IncomingText = "como estou?", History = [], Stage = Stage.CollectGoals, SavedGoals = _goals.Saved,
+        };
+
+        var text = await new Application.Agent.GoalTools(context, _goals, progress, _checkIns, _time).GetGoalAsync(2, CancellationToken.None);
+
+        Assert.Contains("Em kg: primeiro registro 95 em 02/11/2026, último 93,6 em 20/11/2026 (variação: -1,4)", text);
+        Assert.DoesNotContain("Total em kg", text);
     }
 
     [Theory]
@@ -237,7 +288,9 @@ public class MonthlySummaryTests
     }
 
     private MonthlySummaryJob Job(IChatClient ai) =>
-        new(_goals, _reporting, _store, new SummaryWriter(ai), Workflow(ai), _time, NullLogger<MonthlySummaryJob>.Instance);
+        new(_goals, _reporting, _store, new SummaryWriter(ai), _journal, Workflow(ai), _time, NullLogger<MonthlySummaryJob>.Instance);
+
+    private readonly FakeFitnessJournal _journal = new();
 
     private PippinWorkflow Workflow(IChatClient ai) =>
         new(
@@ -250,6 +303,7 @@ public class MonthlySummaryTests
             new GreetingReply(),
             new PathClassifier(ai),
             new GoalsAgent(ai, _goals, _progress, _checkIns, _time, NullLoggerFactory.Instance),
+            new FitnessAgent(ai, new FakeFitnessJournal(), new FakeFitnessReminders(), _goals, _progress, _checkIns, _time, NullLoggerFactory.Instance),
             _goals,
             _channel,
             NullLogger<PippinWorkflow>.Instance);

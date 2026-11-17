@@ -23,4 +23,9 @@
     <ProjectReference Include="..\..\src\LifeAim.Api\LifeAim.Api.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Made-up pictures for the real-AI tests (a nutrition label of a product that does not exist). -->
+    <None Update="Assets\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

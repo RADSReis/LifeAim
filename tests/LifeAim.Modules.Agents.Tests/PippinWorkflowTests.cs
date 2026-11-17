@@ -1,4 +1,5 @@
 using LifeAim.Modules.Agents.Application.Agent;
+using LifeAim.Modules.Agents.Application.Fitness;
 using LifeAim.Modules.Agents.Application.Nodes;
 using LifeAim.Modules.Agents.Application.Planning;
 using LifeAim.Modules.Agents.Application.Workflow;
@@ -1075,6 +1076,7 @@ public class PippinWorkflowTests
             new GreetingReply(),
             new PathClassifier(ai),
             new GoalsAgent(ai, goals, progress, new FakeCheckInService(), November, NullLoggerFactory.Instance),
+            new FitnessAgent(ai, new FakeFitnessJournal(), new FakeFitnessReminders(), goals, progress, new FakeCheckInService(), November, NullLoggerFactory.Instance),
             goals,
             _channel,
             NullLogger<PippinWorkflow>.Instance);
