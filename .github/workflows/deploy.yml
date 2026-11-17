@@ -117,15 +117,24 @@ jobs:
           scp deploy/compose.yml "vps:$APP_ROOT/$LA_ENV/compose.yml"
           # Created once; secrets added there by hand later are kept.
           ssh vps "cd $APP_ROOT/$LA_ENV && [ -f .env ] || { printf 'LA_ENV=%s\nLA_IMAGE_TAG=%s\n' '$LA_ENV' '$TAG' > .env && chmod 600 .env; }"
+          # The database user and password are born on the server, once, and never leave it.
+          ssh vps "cd $APP_ROOT/$LA_ENV && sh -s" <<'SH'
+          grep -q '^LA_DB_PASSWORD=' .env || {
+            rnd() { head -c "$1" /dev/urandom | od -An -tx1 | tr -d ' \n'; }
+            printf 'LA_DB_USER=u%s\nLA_DB_PASSWORD=%s\n' "$(rnd 4)" "$(rnd 24)" >> .env
+          }
+          SH
 
       # Same pattern as Questkeep: the job's short-lived token logs in to GHCR in a throwaway Docker
       # config, so no registry credential stays on the VPS, and the deploy waits on the same lock as
       # Questkeep's, since parallel pulls or a prune during a pull break Docker's content store.
-      - name: Pull and restart the API
+      # The database starts (or stays) first, the Migrator applies what is new, and only then the API restarts:
+      # a failed migration stops the deploy (set -e) with the old API still running.
+      - name: Pull, migrate the database and restart the API
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          remote='set -e; d=$(mktemp -d); trap "rm -rf \"$d\"" EXIT; export DOCKER_CONFIG="$d"; if [ -d "$HOME/.docker/cli-plugins" ]; then ln -s "$HOME/.docker/cli-plugins" "$d/cli-plugins"; fi; docker login ghcr.io -u "$1" --password-stdin; cd "$2"; docker compose pull api; docker compose up -d api; docker image prune -f || true'
+          remote='set -e; d=$(mktemp -d); trap "rm -rf \"$d\"" EXIT; export DOCKER_CONFIG="$d"; if [ -d "$HOME/.docker/cli-plugins" ]; then ln -s "$HOME/.docker/cli-plugins" "$d/cli-plugins"; fi; docker login ghcr.io -u "$1" --password-stdin; cd "$2"; docker compose pull api; docker compose up -d db; docker compose run --rm migrator; docker compose up -d api; docker image prune -f || true'
           lock='if command -v flock >/dev/null 2>&1; then exec flock -w 900 /tmp/questkeep-deploy.lock "$@"; else exec "$@"; fi'
           printf '%s' "$GHCR_TOKEN" | ssh vps "sh -c $(printf '%q' "$lock") lock sh -c $(printf '%q' "$remote") deploy $(printf '%q' "$GITHUB_ACTOR") $APP_ROOT/$LA_ENV"
 

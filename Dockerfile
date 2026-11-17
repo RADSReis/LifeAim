@@ -1,4 +1,4 @@
-# API image. Build from the repository root: docker build -t lifeaim-api .
+# API image (with the Migrator). Build from the repository root: docker build -t lifeaim-api .
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
@@ -6,6 +6,8 @@ WORKDIR /src
 COPY global.json ./
 COPY src/ src/
 RUN dotnet publish src/LifeAim.Api/LifeAim.Api.csproj -c Release -o /out /p:UseAppHost=false
+# The Migrator travels in the same image (its own folder): the deploy runs it before restarting the API.
+RUN dotnet publish src/LifeAim.Migrator/LifeAim.Migrator.csproj -c Release -o /out/migrator /p:UseAppHost=false
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
 WORKDIR /app

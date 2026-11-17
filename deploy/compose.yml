@@ -1,29 +1,79 @@
 # One LifeAim environment (dev or prod) on the Questkeep VPS.
 # Each environment is its own folder on the server (/srv/lifeaim/<env>) with this file and
 # its own .env; the project name (lifeaim-dev / lifeaim-prod) keeps their containers apart:
-#   docker compose up -d
+#   docker compose up -d db && docker compose run --rm migrator && docker compose up -d api
 # Nothing here publishes a port: the VPS Caddy proxy (RADSReis/vps-infra) reaches the API through the shared
-# "edge" network by its alias (see deploy/caddy).
+# "edge" network by its alias (see deploy/caddy). The database lives only on this environment's own network.
+#
+# The .env (never in git) holds: LA_ENV, LA_IMAGE_TAG, LA_DB_USER and LA_DB_PASSWORD (generated on the server
+# by the first deploy), plus the secrets added there by hand (OpenAI__ApiKey, Discord__Token, ...).
 
 name: lifeaim-${LA_ENV:?set LA_ENV (dev or prod) in .env}
 
+x-connection-string: &connection-string
+  ConnectionStrings__LifeAim: Host=lifeaim-${LA_ENV}-db;Database=lifeaim;Username=${LA_DB_USER:?set LA_DB_USER in .env};Password=${LA_DB_PASSWORD:?set LA_DB_PASSWORD in .env}
+
 services:
+  db:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: lifeaim
+      POSTGRES_USER: ${LA_DB_USER:?set LA_DB_USER in .env}
+      POSTGRES_PASSWORD: ${LA_DB_PASSWORD:?set LA_DB_PASSWORD in .env}
+    # PostgreSQL 18 keeps its data under /var/lib/postgresql/18/docker: the volume is mounted one level up.
+    volumes:
+      - db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d lifeaim"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      internal:
+        aliases: ["lifeaim-${LA_ENV}-db"]
+
+  # Applies every module's migrations (forward only) and exits; the deploy runs it before restarting the API.
+  migrator:
+    image: ghcr.io/radsreis/lifeaim-api:${LA_IMAGE_TAG:?set LA_IMAGE_TAG in .env}
+    profiles: ["tools"]
+    entrypoint: ["dotnet", "migrator/LifeAim.Migrator.dll"]
+    restart: "no"
+    environment:
+      <<: *connection-string
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [internal]
+
   api:
     image: ghcr.io/radsreis/lifeaim-api:${LA_IMAGE_TAG:?set LA_IMAGE_TAG in .env}
     restart: unless-stopped
     environment:
+      <<: *connection-string
       ASPNETCORE_ENVIRONMENT: Production
       # Behind Caddy: honour its X-Forwarded-For/-Proto headers.
       ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
+      # Pippin's AI. Added by hand to this environment's .env; left blank, Pippin answers that its brain is off.
+      OpenAI__ApiKey: ${OpenAI__ApiKey:-}
       # Discord bot ("__" is ":" for .NET). Secrets added by hand to this environment's .env on the VPS;
       # left blank, the bot stays off and the API still runs. "docker compose up -d api" picks up changes.
       Discord__Token: ${Discord__Token:-}
       Discord__AllowedUserIds__0: ${Discord__AllowedUserIds__0:-}
+    depends_on:
+      db:
+        condition: service_healthy
     networks:
+      internal:
       edge:
         aliases: ["lifeaim-${LA_ENV}-api"]
 
 networks:
+  # This environment only: the API and its database.
+  internal:
   # Created by the proxy (vps-infra); shared by the proxy and every app.
   edge:
     external: true
+
+volumes:
+  db-data:
