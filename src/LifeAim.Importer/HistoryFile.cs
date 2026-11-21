@@ -25,6 +25,9 @@ internal static partial class HistoryFile
     /// </summary>
     public static Sections Split(string text, string? only = null)
     {
+        // A file saved on Windows ends its lines with \r\n, and a multiline "$" only stops before \n: one kind of line
+        // end for everything after this point.
+        text = text.ReplaceLineEndings("\n");
         var meals = SectionTitle().Matches(text).FirstOrDefault(m => m.Groups[1].Value.Contains("ALIMENTA", StringComparison.OrdinalIgnoreCase));
         var body = SectionTitle().Matches(text).FirstOrDefault(m => m.Groups[1].Value.Contains("EMAGRECIMENTO", StringComparison.OrdinalIgnoreCase));
         var foods = SectionTitle().Matches(text).FirstOrDefault(m => m.Groups[1].Value.Contains("TABELA", StringComparison.OrdinalIgnoreCase));

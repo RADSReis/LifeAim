@@ -99,6 +99,11 @@ internal sealed class DetailGoalsNode(
             case Decisions.Greeting:
                 return NodeResult.Greeting;
 
+            // "cancela a meta do livro", "delete essa meta", "pausa a corrida": never a plan correction. The goals
+            // agent takes it and the code asks the explicit "sim"; after it, the detailing goes on (ConfirmCancelGoal).
+            case Decisions.GoalAction:
+                return NodeResult.GoalTalk;
+
             // The user moved on without answering "Está certo?": that counts as "sim". The plan is saved, the
             // conversation goes to the next goal, and the message is handled from there.
             case Decisions.Other when waitingConfirmation:
@@ -169,6 +174,10 @@ internal sealed class DetailGoalsNode(
             - "{Decisions.Change}": corrige o plano mostrado ou a meta ("prefiro à noite", "na verdade são 3 livros").
             - "{Decisions.Skip}": quer deixar esta meta para depois ("pula", "depois eu vejo", "agora não").
             - "{Decisions.Greeting}": é apenas um cumprimento ou conversa social ("oi", "olá", "bom dia").
+            - "{Decisions.GoalAction}": pede para cancelar, excluir, apagar, deletar, desistir, encerrar, pausar ou
+              trocar esta meta ou outra ("cancele a meta do livro, vou mudar a meta", "delete a meta de ler livros",
+              "pausa a corrida"). Isso NUNCA é "{Decisions.Change}": mudar o plano ou a meta é corrigir valores,
+              dias ou horários; tirar a meta da lista é "{Decisions.GoalAction}".
             - "{Decisions.Other}": a mensagem não é sobre esta meta (outra meta, uma pergunta ou pedido de outro assunto).
 
             goal: a meta COMPLETA e atualizada com o que o usuário disse (ex.: "peso 97" → startValue 97); mantenha o
@@ -199,6 +208,7 @@ internal sealed class DetailGoalsNode(
         public const string Change = "change";
         public const string Skip = "skip";
         public const string Greeting = "greeting";
+        public const string GoalAction = "goal_action";
         public const string Other = "other";
     }
 

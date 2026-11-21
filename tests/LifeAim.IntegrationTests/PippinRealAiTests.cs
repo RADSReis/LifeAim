@@ -327,6 +327,27 @@ public sealed class PippinRealAiTests(RealAiApiFactory factory, ITestOutputHelpe
         Assert.Equal("CollectGoals", (await StateAsync()).Stage);
     }
 
+    // The conversation of 21/11/2026 in dev: both were taken as a plan correction and the "sim" saved the plan.
+    [RealAiTheory]
+    [InlineData("cancele a meta do livro, não vou conseguir ler porque estou fazendo o curso, vou mudar a meta")]
+    [InlineData("delete a meta de ler livros")]
+    public async Task Asking_to_cancel_the_goal_being_detailed_asks_the_explicit_yes(string answer)
+    {
+        var id = await SeedGoalAsync("Ler 1 livro", RealAiApiFactory.Now);
+        await SeedAsync("DetailGoals", DetailingDraft(id, withPlan: true));
+
+        var reply = await Send(answer);
+
+        Assert.Equal("ConfirmCancelGoal", (await StateAsync()).Stage);
+        Assert.Contains("Ler 1 livro", reply);
+        Assert.Empty(await RoutinesAsync()); // the plan shown was not saved
+
+        await Send("sim");
+
+        Assert.Empty(await GoalsAsync()); // cancelled: out of the list, the history kept
+        Assert.Empty(await RoutinesAsync());
+    }
+
     // ---------- The path classifier ----------
 
     [RealAiFact]

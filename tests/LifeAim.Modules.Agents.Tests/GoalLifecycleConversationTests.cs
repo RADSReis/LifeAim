@@ -122,6 +122,36 @@ public class GoalLifecycleConversationTests
         Assert.Equal([_running.Id], (await _goals.ListAsync(UserId)).Select(g => g.Id));
     }
 
+    [Theory]
+    [InlineData("cancele a meta do livro, não vou conseguir ler porque estou fazendo o curso, vou mudar a meta")]
+    [InlineData("delete a meta de ler livros")]
+    public async Task Asking_to_cancel_the_goal_being_detailed_asks_the_yes_instead_of_saving_its_plan(string text)
+    {
+        // Pippin showed the reading plan and asked "Está certo?" (the conversation of 21/11/2026 in dev).
+        _store.States[UserId] = new ConversationState(Stage.DetailGoals, "Rafael", GoalsDraft.Empty(null) with
+        {
+            DetailQueue = [_reading.Id],
+            Goals = [new GoalDraft("Ler 12 livros", null, "livros terminados", null, 12, "livros", null)],
+            Plan = new PlanDraft([], RoutineSource.User),
+        });
+
+        var question = await Workflow(new FakeChatClient(
+                FakeChatClient.Text("""{ "decision": "goal_action" }"""),
+                FakeChatClient.ToolCall("request_goal_cancellation", new() { ["goalNumber"] = 2, ["reason"] = "estou fazendo o curso" }),
+                FakeChatClient.Text("")))
+            .ReplyAsync(Message(text));
+
+        Assert.Equal(ConfirmCancelGoalNode.Question("Ler 12 livros"), question);
+        Assert.Equal(Stage.ConfirmCancelGoal, _store.States[UserId].Stage);
+        Assert.DoesNotContain(_goals.RoutinesReplaced, r => r.GoalId == _reading.Id); // the plan was not saved
+
+        var done = await Workflow(new FakeChatClient("""{ "decision": "confirm" }""")).ReplyAsync(Message("sim"));
+
+        Assert.StartsWith("Pronto, cancelei a meta **Ler 12 livros**", done);
+        Assert.Equal(GoalStatus.Cancelled, _goals.StatusOf(_reading.Id));
+        Assert.DoesNotContain(_goals.RoutinesReplaced, r => r.GoalId == _reading.Id);
+    }
+
     [Fact]
     public async Task A_paused_goal_can_be_ended_without_coming_back_first()
     {
