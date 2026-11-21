@@ -125,6 +125,20 @@ jobs:
           }
           SH
 
+      # The OpenAI key lives in the GitHub environment's secret OPENAI_API_KEY (dev or prod). When set, it replaces
+      # the one in the server's .env, going through ssh's stdin (never on a command line); when not, the key already
+      # on the server is kept. The next step's "up -d api" picks the change up.
+      - name: Write the OpenAI key from the environment's secret
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "No OPENAI_API_KEY secret in this environment: the key on the server is kept."
+            exit 0
+          fi
+          printf '%s\n' "$OPENAI_API_KEY" | ssh vps 'cd '"$APP_ROOT/$LA_ENV"' && IFS= read -r k && umask 077 && { grep -v "^OpenAI__ApiKey=" .env; printf "OpenAI__ApiKey=%s\n" "$k"; } > .env.new && mv .env.new .env'
+          echo "OpenAI key written to the $LA_ENV .env."
+
       # Same pattern as Questkeep: the job's short-lived token logs in to GHCR in a throwaway Docker
       # config, so no registry credential stays on the VPS, and the deploy waits on the same lock as
       # Questkeep's, since parallel pulls or a prune during a pull break Docker's content store.
